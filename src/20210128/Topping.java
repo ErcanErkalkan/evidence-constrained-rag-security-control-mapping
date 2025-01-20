@@ -1,0 +1,13 @@
+public enum Topping {
+  ONIONS,
+  MOZZARELLA,
+  SALAMI,
+  MUSHROOMS,
+  SALMON,
+  OLIVES,
+  PINEAPPLE,
+  SPINACH,
+  PEPPERS,
+  CHILI,
+  GARLIC
+}
