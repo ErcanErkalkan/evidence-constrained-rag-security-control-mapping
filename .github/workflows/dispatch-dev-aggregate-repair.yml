@@ -1,0 +1,19 @@
+name: Dispatch DEV aggregate repair
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/dispatch-dev-aggregate-repair.yml]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch aggregate-only repair on current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run aicconf-phase2-full-dev-aggregate-repair.yml --repo "$GITHUB_REPOSITORY" --ref main
