@@ -1,0 +1,162 @@
+        domain = str(r.get(args.domain_field, "")).strip() if args.domain_field else ""
+
+        if not ccm_id or not text:
+            exclusions.append({"row": idx, "ccm_id": ccm_id, "reason": "missing_ccm_id_or_text"})
+            continue
+        if not CCM_ID_RE.search(ccm_id):
+            exclusions.append({"row": idx, "ccm_id": ccm_id, "reason": "ccm_id_format_unrecognized"})
+            continue
+        if unparsed_tokens:
+            invalid_refs.append({"row": idx, "ccm_id": ccm_id, "unparsed_mapping_tokens": unparsed_tokens, "raw_mapping": str(rawmap)})
+            exclusions.append({"row": idx, "ccm_id": ccm_id, "reason": "unparsed_mapping_token", "tokens": unparsed_tokens, "raw_mapping": str(rawmap)})
+            continue
+        if not mapped:
+            exclusions.append({"row": idx, "ccm_id": ccm_id, "reason": "no_official_nist_mapping", "raw_mapping": str(rawmap)})
+            continue
+        invalid = [x for x in mapped if x not in nist_ids]
+        if invalid:
+            invalid_refs.append({"row": idx, "ccm_id": ccm_id, "invalid_nist_ids": invalid, "raw_mapping": str(rawmap)})
+            exclusions.append({"row": idx, "ccm_id": ccm_id, "reason": "unresolvable_nist_id", "ids": invalid})
+            continue
+        pair = (ccm_id, tuple(mapped))
+        if pair in seen_pairs:
+            exclusions.append({"row": idx, "ccm_id": ccm_id, "reason": "exact_duplicate_query_gold_pair"})
+            continue
+        seen_pairs.add(pair)
+        text_hash = hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
+        qid = f"{args.ccm_version}:{ccm_id}"
+        rows.append(BenchmarkRow(
+            query_id=qid,
+            ccm_version=args.ccm_version,
+            ccm_control_id=ccm_id,
+            ccm_control_text=text,
+            ccm_control_text_hash=text_hash,
+            ccm_domain=domain,
+            ccm_title=title,
+            gold_nist_control_ids="|".join(mapped),
+            gold_nist_control_ids_raw=str(rawmap).strip(),
+            gold_mapping_cardinality=len(mapped),
+            gold_mapping_range_expressions="|".join(range_exprs),
+            gold_mapping_gap_level=gap,
+            gold_mapping_addendum=addendum,
+            mapping_source_file=src.name,
+            mapping_source_version=args.mapping_version,
+            mapping_source_sheet=args.sheet or fmt,
+            mapping_source_row=str(idx),
+            nist_catalog_version=args.nist_version,
+            split=stable_split(ccm_id, args.split_seed, args.dev_pct),
+            source_hash=src_hash,
+            notes="",
+        ))
+
+    if invalid_refs:
+        # Final benchmark must have zero invalid mappings. Exclusions are logged, but nontrivial invalidity is a hard gate.
+        rate = len(invalid_refs) / max(1, len(records))
+        if rate > args.max_invalid_rate:
+            (outdir / "validation_report.json").write_text(json.dumps({
+                "status": "FAIL", "invalid_rate": rate, "invalid_refs": invalid_refs,
+                "message": "Invalid NIST mapping rate exceeds threshold; no benchmark written"
+            }, indent=2), encoding="utf-8")
+            raise ValueError(f"Invalid NIST mappings {len(invalid_refs)}/{len(records)} exceed allowed rate {args.max_invalid_rate}")
+
+    if len(rows) < args.min_rows:
+        raise ValueError(f"Only {len(rows)} validated benchmark rows; minimum is {args.min_rows}")
+
+    fieldnames = list(asdict(rows[0]).keys())
+    with (outdir / "benchmark.csv").open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames); w.writeheader(); w.writerows(asdict(x) for x in rows)
+    with (outdir / "exclusions.csv").open("w", encoding="utf-8", newline="") as f:
+        fields = sorted({k for x in exclusions for k in x}) or ["reason"]
+        w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(exclusions)
+
+    cardinality_dist = Counter(x.gold_mapping_cardinality for x in rows)
+    gap_dist = Counter((x.gold_mapping_gap_level or "<EMPTY>") for x in rows)
+    family_dist: Counter[str] = Counter()
+    for x in rows:
+        for nid in x.gold_nist_control_ids.split("|"):
+            if nid:
+                family_dist[nid.split("-", 1)[0]] += 1
+    exclusion_reason_dist = Counter(str(x.get("reason", "<UNKNOWN>")) for x in exclusions)
+
+    manifest = {
+        "status": "FROZEN_CANDIDATE",
+        "mapping_source": {"path": str(src), "sha256": src_hash, "version": args.mapping_version, "sheet": args.sheet, "upstream_blob_sha": args.mapping_source_blob_sha or ""},
+        "nist_catalog": {"path": args.nist_catalog, "sha256": sha256_file(Path(args.nist_catalog)), "version": args.nist_version, "validated_id_count": len(nist_ids), "upstream_blob_sha": args.nist_source_blob_sha or ""},
+        "benchmark": {
+            "rows": len(rows),
+            "dev": sum(x.split == "dev" for x in rows),
+            "test": sum(x.split == "test" for x in rows),
+            "split_seed": args.split_seed,
+            "mapping_cardinality": {
+                "min": min(x.gold_mapping_cardinality for x in rows),
+                "max": max(x.gold_mapping_cardinality for x in rows),
+                "mean": sum(x.gold_mapping_cardinality for x in rows)/len(rows),
+                "distribution": {str(k): cardinality_dist[k] for k in sorted(cardinality_dist)},
+                "range_expression_rows": sum(bool(x.gold_mapping_range_expressions) for x in rows),
+            },
+            "gap_level_distribution": dict(sorted(gap_dist.items())),
+            "nist_family_label_distribution": dict(sorted(family_dist.items())),
+        },
+        "excluded": len(exclusions),
+        "exclusion_reason_distribution": dict(sorted(exclusion_reason_dist.items())),
+        "invalid_mappings_excluded": len(invalid_refs),
+        "builder_sha256": sha256_file(Path(__file__)),
+    }
+    (outdir / "source_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    outputs = [outdir / "benchmark.csv", outdir / "exclusions.csv", outdir / "source_manifest.json"]
+    freeze = {"files": {p.name: sha256_file(p) for p in outputs}}
+    (outdir / "BENCHMARK_FREEZE.json").write_text(json.dumps(freeze, indent=2), encoding="utf-8")
+    report = {
+        "status": "PASS_CANDIDATE_REQUIRES_MANUAL_PROVENANCE_SIGNOFF",
+        "records_in_source": len(records),
+        "benchmark_rows": len(rows),
+        "exclusions": len(exclusions),
+        "unmapped_exclusions": exclusion_reason_dist.get("no_official_nist_mapping", 0),
+        "invalid_mappings_excluded": len(invalid_refs),
+        "source_format": fmt,
+        "mapping_cardinality_distribution": {str(k): cardinality_dist[k] for k in sorted(cardinality_dist)},
+        "gap_level_distribution": dict(sorted(gap_dist.items())),
+        "nist_family_label_distribution": dict(sorted(family_dist.items())),
+        "exclusion_reason_distribution": dict(sorted(exclusion_reason_dist.items())),
+    }
+    (outdir / "validation_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser()
+    p.add_argument("--mapping", required=True)
+    p.add_argument("--sheet")
+    p.add_argument("--nist-catalog")
+    p.add_argument("--discover", action="store_true")
+    p.add_argument("--ccm-id-field")
+    p.add_argument("--text-field")
+    p.add_argument("--nist-field")
+    p.add_argument("--gap-field")
+    p.add_argument("--addendum-field")
+    p.add_argument("--title-field")
+    p.add_argument("--domain-field")
+    p.add_argument("--ccm-version", default="UNLOCKED")
+    p.add_argument("--mapping-version", default="UNLOCKED")
+    p.add_argument("--mapping-source-blob-sha", default="")
+    p.add_argument("--nist-version", default="UNLOCKED")
+    p.add_argument("--nist-source-blob-sha", default="")
+    p.add_argument("--split-seed", default="AICCONF2027-v1")
+    p.add_argument("--dev-pct", type=int, default=20)
+    p.add_argument("--min-rows", type=int, default=50)
+    p.add_argument("--max-invalid-rate", type=float, default=0.0)
+    p.add_argument("--allow-nonstandard-nist-field", action="store_true")
+    p.add_argument("--outdir", default="benchmark_frozen")
+    return p
+
+
+if __name__ == "__main__":
+    args = parser().parse_args()
+    if not args.discover and not args.nist_catalog:
+        sys.exit("ERROR: --nist-catalog required unless --discover")
+    try:
+        raise SystemExit(build(args))
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        raise SystemExit(2)
