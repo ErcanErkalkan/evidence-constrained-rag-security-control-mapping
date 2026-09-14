@@ -20,32 +20,37 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Decode and verify canonical Phase-1 package
+      - name: Reconstruct and verify canonical Phase-1 code
         shell: bash
+        working-directory: aicconf_runner/phase1
         run: |
           set -euo pipefail
-          base64 -d aicconf_runner/phase1_package.zip.b64 > /tmp/phase1.zip
-          echo "aee017b78948bfb9c9dcc6d04a0dcd0b1faa1e252a8182b8598be69e4c351c38  /tmp/phase1.zip" | sha256sum -c -
-          rm -rf /tmp/phase1_work
-          mkdir -p /tmp/phase1_work
-          unzip -q /tmp/phase1.zip -d /tmp/phase1_work
-          test -f /tmp/phase1_work/aicconf_phase1/run_phase1_freeze.py
+          cat build_benchmark.part1 build_benchmark.part2 build_benchmark.part3 > build_benchmark.py
+          cat > /tmp/expected.sha256 <<'EOF'
+          41b3834fbac6a948177aed12c3912615c1231b5107a36f8b13ac570a4e5938ce  acquire_sources.py
+          e621fce3d2ebadb2772f89fbc363b7c0a93faf54c6eee83deb412ce60a5a3713  build_benchmark.py
+          73debfff879730e7122f5fc00791f749527e8a12563a23c226c9044a64d771b0  parser_regression_test.py
+          8deda856a839fdaeaec64c825ab033ed24bc69cd72c26ee33db0023351aa9dae  requirements.txt
+          5c1c71b17e51f9d460ff3b711e7436c6ebeebe6189f0a2fbcea7c4e588a4b63b  run_phase1_freeze.py
+          EOF
+          sha256sum -c /tmp/expected.sha256
+          python -m py_compile acquire_sources.py build_benchmark.py parser_regression_test.py run_phase1_freeze.py
 
       - name: Install Phase-1 requirements
         shell: bash
-        working-directory: /tmp/phase1_work/aicconf_phase1
+        working-directory: aicconf_runner/phase1
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
       - name: Parser regression test
         shell: bash
-        working-directory: /tmp/phase1_work/aicconf_phase1
+        working-directory: aicconf_runner/phase1
         run: python parser_regression_test.py
 
       - name: Run immutable-source Phase-1 freeze
         shell: bash
-        working-directory: /tmp/phase1_work/aicconf_phase1
+        working-directory: aicconf_runner/phase1
         run: |
           set -euo pipefail
           python run_phase1_freeze.py 2>&1 | tee /tmp/phase1_run.log
@@ -58,12 +63,14 @@ jobs:
           print('VERIFIED:', obj['status'])
           print('benchmark_rows:', obj['validation_report']['benchmark_rows'])
           print('exclusions:', obj['validation_report']['exclusions'])
+          print('ccm_sha256:', obj['source_freeze']['files']['ccm']['sha256'])
+          print('nist_sha256:', obj['source_freeze']['files']['nist']['sha256'])
           PY
 
       - name: Build frozen handoff
         if: success()
         shell: bash
-        working-directory: /tmp/phase1_work/aicconf_phase1
+        working-directory: aicconf_runner/phase1
         run: |
           set -euo pipefail
           cp /tmp/phase1_run.log run/PHASE1_RUN.log
