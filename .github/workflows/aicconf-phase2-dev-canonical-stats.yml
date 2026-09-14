@@ -1,0 +1,74 @@
+name: AICCONF Phase2 DEV Canonical Statistics
+
+on:
+  push:
+    branches: [aicconf-full-dev-recovery-20260914]
+    paths: [.github/workflows/aicconf-phase2-dev-canonical-stats.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify exact canonical v1.6 statistics code
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '383c0555dffa7eaf7d5dd78a1e9d7eba6cbf3438ea9e23569bb93ed9f6eb4708  statistical_tests.py' | sha256sum -c -
+          echo '7f0e569d4a0bda86d660a9ed6cd1ca7e75c25e7ccb84fa4ab427f901ebb7029e  common.py' | sha256sum -c -
+          python -m pip install -r requirements.txt
+      - name: Recover verified 408-case full DEV result
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/devfinal
+          gh run download 34879018387 --repo ErcanErkalkan/evidence-constrained-rag-security-control-mapping --name AICCONF-PHASE2-FULL-DEV-QWEN-v16-RECOVERED --dir /tmp/devfinal
+          echo 'b71fae88e89ae69a54314c4bff2238dc55d17064c2a0b0e9152cd4b659ee589b  /tmp/devfinal/eval/generation_per_case.csv' | sha256sum -c -
+          python - <<'PY'
+          import json
+          x=json.load(open('/tmp/devfinal/FULL_DEV_INTEGRITY.json'))
+          assert x['status']=='PASS_FULL_DEV_EVALUATED' and x['case_count']==408
+          assert x['model_digest']=='65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b'
+          assert x['test_accessed'] is False
+          print('PASS_VERIFIED_FULL_DEV_INPUT')
+          PY
+      - name: Run pre-registered query-level tests
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/stats
+          python statistical_tests.py --per-case /tmp/devfinal/eval/generation_per_case.csv --outdir /tmp/stats --bootstrap-iters 10000 --seed 2027
+          echo '5cba7161cd6c011cf3c81a0e78c98f6e4a8dc0ae4294b1a4d824d94686be6dd6  /tmp/stats/paired_tests.csv' | sha256sum -c -
+          echo '5fd67ca5a87aeb903d8bbad368a8ef7f4188aa8395b3ab14532549819c65b78b  /tmp/stats/stats_manifest.json' | sha256sum -c -
+          python - <<'PY'
+          import csv,json,pathlib
+          rows=list(csv.DictReader(open('/tmp/stats/paired_tests.csv',encoding='utf-8')))
+          sig=[r for r in rows if r['p_holm'] and float(r['p_holm'])<=0.05]
+          out={
+            'status':'PASS_CANONICAL_DEV_STATISTICS',
+            'statistical_tests_sha256':'383c0555dffa7eaf7d5dd78a1e9d7eba6cbf3438ea9e23569bb93ed9f6eb4708',
+            'input_per_case_sha256':'b71fae88e89ae69a54314c4bff2238dc55d17064c2a0b0e9152cd4b659ee589b',
+            'paired_tests_sha256':'5cba7161cd6c011cf3c81a0e78c98f6e4a8dc0ae4294b1a4d824d94686be6dd6',
+            'stats_manifest_sha256':'5fd67ca5a87aeb903d8bbad368a8ef7f4188aa8395b3ab14532549819c65b78b',
+            'tests':len(rows),'holm_significant':len(sig),'test_accessed':False
+          }
+          pathlib.Path('/tmp/stats/DEV_STATS_INTEGRITY.json').write_text(json.dumps(out,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AICCONF-PHASE2-DEV-CANONICAL-STATS-v16
+          path: /tmp/stats
+          retention-days: 30
