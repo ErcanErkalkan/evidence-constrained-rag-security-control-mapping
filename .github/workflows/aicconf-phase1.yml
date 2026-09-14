@@ -1,9 +1,6 @@
 name: AICCONF Phase1 Freeze
 
 on:
-  push:
-    branches:
-      - aicconf-experiment-20260914
   workflow_dispatch:
 
 permissions:
