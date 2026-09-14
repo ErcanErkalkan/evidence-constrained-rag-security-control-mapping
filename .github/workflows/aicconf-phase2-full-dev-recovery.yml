@@ -1,0 +1,174 @@
+name: AICCONF Phase2 Full DEV Recovery
+
+on:
+  push:
+    branches: [aicconf-full-dev-recovery-20260914]
+    paths: [.github/workflows/aicconf-phase2-full-dev-recovery.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+
+      - name: Verify evaluator code and install requirements
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '367b1cb539cfb58c5bbdd3f676b8b838ffc56732058b2d795621d9c48d6a6055  apply_output_guard.py' | sha256sum -c -
+          echo '2070d73f14b3f3d605a5d26e006ce8c62512af1c265e2a537b14cc2477485ce4  evaluate_generation.py' | sha256sum -c -
+          echo '7f0e569d4a0bda86d660a9ed6cd1ca7e75c25e7ccb84fa4ab427f901ebb7029e  common.py' | sha256sum -c -
+          python -m pip install -r requirements.txt
+
+      - name: Recover prep and eight successful shard artifacts from original run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO='ErcanErkalkan/evidence-constrained-rag-security-control-mapping'
+          RUN='34848420216'
+          mkdir -p /tmp/dev /tmp/shards
+          gh run download "$RUN" --repo "$REPO" --name phase2-full-dev-prep --dir /tmp/dev
+          for s in 0 1 2 3 4 5 6 7; do
+            mkdir -p "/tmp/shards/$s"
+            gh run download "$RUN" --repo "$REPO" --name "phase2-full-dev-shard-$s" --dir "/tmp/shards/$s"
+          done
+          find /tmp/shards -type f | sort
+
+      - name: Independently verify and merge exactly 408 predictions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/final
+          python - <<'PY'
+          import json, pathlib, hashlib, statistics
+          root=pathlib.Path('/tmp/shards')
+          order=json.load(open('/tmp/dev/full_dev_order.json',encoding='utf-8'))
+          assert len(order)==408 and len(set(order))==408
+          pred_files=sorted(root.rglob('pred_*.jsonl'))
+          assert len(pred_files)==8, [str(p) for p in pred_files]
+          preds={}; shard_report=[]
+          expected_digest='65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b'
+          for p in pred_files:
+              mf=pathlib.Path(str(p)+'.manifest.json')
+              assert mf.exists(), mf
+              m=json.load(open(mf,encoding='utf-8'))
+              assert m['status']=='PASS_COMPLETE' and m['case_count']==51 and not m['failures']
+              assert m['model']=='qwen2.5:1.5b' and m['model_digest']==expected_digest
+              local=[]
+              for line in open(p,encoding='utf-8'):
+                  r=json.loads(line); cid=r['case_id']
+                  assert cid not in preds, cid
+                  assert r['model']=='qwen2.5:1.5b'
+                  assert r['model_digest']==expected_digest
+                  assert r.get('error','')==''
+                  preds[cid]=r; local.append(cid)
+              assert len(local)==51
+              shard_report.append({'file':str(p),'rows':51,'manifest_predictions_sha256':m['predictions_sha256']})
+          assert len(preds)==408, len(preds)
+          assert set(order)==set(preds)
+          out=pathlib.Path('/tmp/final/pred_qwen2.5_1.5b.jsonl')
+          with out.open('w',encoding='utf-8') as f:
+              for cid in order:
+                  f.write(json.dumps(preds[cid],ensure_ascii=False,sort_keys=True)+'\n')
+          lats=[float(preds[cid]['latency_s']) for cid in order]
+          manifest={
+              'status':'PASS_FULL_DEV_MERGED',
+              'case_count':408,
+              'unique_case_ids':408,
+              'model':'qwen2.5:1.5b',
+              'model_digest':expected_digest,
+              'predictions_sha256':hashlib.sha256(out.read_bytes()).hexdigest(),
+              'latency_mean_s':sum(lats)/len(lats),
+              'latency_median_s':statistics.median(lats),
+              'shards':8,
+              'shard_report':shard_report,
+              'source_run_id':34848420216,
+              'test_accessed':False
+          }
+          pathlib.Path('/tmp/final/FULL_DEV_MERGE_MANIFEST.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+          print(json.dumps(manifest,indent=2))
+          PY
+
+      - name: Apply hardened guard and evaluate complete DEV
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python apply_output_guard.py --cases /tmp/dev/prompt_cases_dev_bm25.jsonl --predictions /tmp/final/pred_qwen2.5_1.5b.jsonl --out /tmp/final/pred_qwen2.5_1.5b_guarded.jsonl
+          python evaluate_generation.py --cases /tmp/dev/prompt_cases_dev_bm25.jsonl --predictions /tmp/final/pred_qwen2.5_1.5b_guarded.jsonl --corpus /tmp/dev/corpus_primary/nist_corpus.csv --outdir /tmp/final/eval
+          cp /tmp/dev/PHASE2_DEV_PREP_MANIFEST.json /tmp/final/
+          cp /tmp/dev/retrieval_dev_bm25/bm25_metrics.json /tmp/final/
+          cp /tmp/dev/full_dev_order.json /tmp/final/
+          python - <<'PY'
+          import json
+          s=json.load(open('/tmp/final/eval/generation_summary.json'))
+          core={k:v for k,v in s.items() if not k.startswith('_')}
+          print('FULL_DEV_SUMMARY')
+          print(json.dumps(core,indent=2,allow_nan=True))
+          PY
+
+      - name: Run pre-registered statistical tests only if canonical checksum matches
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL=$(sha256sum statistical_tests.py | awk '{print $1}')
+          EXPECTED='383c0555dffa7eaf7d5dd78a1e9d7eba6cbf3438ea9e23569bb93ed9f6eb4708'
+          echo "statistical_tests.py sha256=$ACTUAL"
+          if [ "$ACTUAL" = "$EXPECTED" ]; then
+            python statistical_tests.py --per-case /tmp/final/eval/generation_per_case.csv --outdir /tmp/final/stats --bootstrap-iters 10000 --seed 2027
+            printf '{"status":"PASS_CANONICAL_STATS_RUN","sha256":"%s"}\n' "$ACTUAL" > /tmp/final/STATS_GATE.json
+          else
+            printf '{"status":"BLOCKED_NONCANONICAL_STATISTICAL_TEST_SCRIPT","expected_sha256":"%s","actual_sha256":"%s"}\n' "$EXPECTED" "$ACTUAL" > /tmp/final/STATS_GATE.json
+          fi
+          cat /tmp/final/STATS_GATE.json
+
+      - name: Final DEV integrity manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, pathlib, hashlib
+          f=pathlib.Path('/tmp/final')
+          merge=json.load(open(f/'FULL_DEV_MERGE_MANIFEST.json'))
+          summary=json.load(open(f/'eval/generation_summary.json'))
+          gate=json.load(open(f/'STATS_GATE.json'))
+          assert merge['status']=='PASS_FULL_DEV_MERGED' and merge['case_count']==408 and merge['test_accessed'] is False
+          prov=summary['_provenance']
+          assert prov['missing_predictions']==0 and prov['extra_predictions']==0 and prov['inference_errors']==0
+          out={
+            'status':'PASS_FULL_DEV_EVALUATED',
+            'source_run_id':34848420216,
+            'case_count':408,
+            'model':merge['model'],
+            'model_digest':merge['model_digest'],
+            'predictions_sha256':merge['predictions_sha256'],
+            'guarded_predictions_sha256':prov['predictions_sha256'],
+            'cases_sha256':prov['cases_sha256'],
+            'corpus_sha256':prov['corpus_sha256'],
+            'missing_predictions':0,
+            'extra_predictions':0,
+            'inference_errors':0,
+            'statistics_gate':gate['status'],
+            'test_accessed':False
+          }
+          (f/'FULL_DEV_INTEGRITY.json').write_text(json.dumps(out,indent=2),encoding='utf-8')
+          print(json.dumps(out,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AICCONF-PHASE2-FULL-DEV-QWEN-v16-RECOVERED
+          path: /tmp/final
+          retention-days: 30
