@@ -1,0 +1,83 @@
+name: AICCONF Phase1 Freeze
+
+on:
+  push:
+    branches:
+      - aicconf-experiment-20260914
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  phase1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Decode and verify canonical Phase-1 package
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d aicconf_runner/phase1_package.zip.b64 > /tmp/phase1.zip
+          echo "aee017b78948bfb9c9dcc6d04a0dcd0b1faa1e252a8182b8598be69e4c351c38  /tmp/phase1.zip" | sha256sum -c -
+          rm -rf /tmp/phase1_work
+          mkdir -p /tmp/phase1_work
+          unzip -q /tmp/phase1.zip -d /tmp/phase1_work
+          test -f /tmp/phase1_work/aicconf_phase1/run_phase1_freeze.py
+
+      - name: Install Phase-1 requirements
+        shell: bash
+        working-directory: /tmp/phase1_work/aicconf_phase1
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Parser regression test
+        shell: bash
+        working-directory: /tmp/phase1_work/aicconf_phase1
+        run: python parser_regression_test.py
+
+      - name: Run immutable-source Phase-1 freeze
+        shell: bash
+        working-directory: /tmp/phase1_work/aicconf_phase1
+        run: |
+          set -euo pipefail
+          python run_phase1_freeze.py 2>&1 | tee /tmp/phase1_run.log
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('run/benchmark_frozen/PHASE1_RELEASE_FREEZE.json')
+          obj=json.loads(p.read_text(encoding='utf-8'))
+          assert obj.get('status') == 'PASS_PHASE1_FROZEN', obj.get('status')
+          print('VERIFIED:', obj['status'])
+          print('benchmark_rows:', obj['validation_report']['benchmark_rows'])
+          print('exclusions:', obj['validation_report']['exclusions'])
+          PY
+
+      - name: Build frozen handoff
+        if: success()
+        shell: bash
+        working-directory: /tmp/phase1_work/aicconf_phase1
+        run: |
+          set -euo pipefail
+          cp /tmp/phase1_run.log run/PHASE1_RUN.log
+          (cd run && zip -qr /tmp/PHASE1_FROZEN_HANDOFF.zip .)
+          sha256sum /tmp/PHASE1_FROZEN_HANDOFF.zip | tee /tmp/PHASE1_FROZEN_HANDOFF.zip.sha256.txt
+
+      - name: Upload Phase-1 frozen handoff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AICCONF-PHASE1-FROZEN-HANDOFF
+          path: |
+            /tmp/PHASE1_FROZEN_HANDOFF.zip
+            /tmp/PHASE1_FROZEN_HANDOFF.zip.sha256.txt
+            /tmp/phase1_run.log
+          if-no-files-found: warn
+          retention-days: 30
