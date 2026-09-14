@@ -19,7 +19,9 @@ The benchmark is built from reproducibly frozen security-control sources and eva
 
 - `aicconf_runner/phase1/` — source acquisition, parsing, benchmark construction, validation, and freeze logic
 - `aicconf_runner/phase2/` — retrieval, adversarial fixtures, prompt-case composition, model execution, output guardrails, evaluation, and statistical tests
-- `.github/workflows/` — reproducible CI/experiment workflows
+- `.github/workflows/` — reproducible experiment and integrity-check workflows
+- `REPRODUCIBILITY.md` — staged protocol, fail-closed rules, and held-out TEST lock
+- `THIRD_PARTY_DATA.md` — upstream data/standards provenance and licensing boundary
 
 ## Reproducibility protocol
 
@@ -33,22 +35,52 @@ The experimental workflow is intentionally staged:
 
 The TEST split is not used for model selection or prompt tuning.
 
+## Frozen benchmark
+
+- Valid benchmark rows: **195**
+- Official no-mapping exclusions: **2**
+- DEV queries: **34**
+- Held-out TEST queries: **161**
+- Frozen benchmark SHA-256: `426d890e16513c3da449dfe08e93f29f556011e6a24288460c07ccba8f090f4f`
+
+## DEV retrieval
+
+BM25 is currently the selected DEV retriever:
+
+- MRR: `0.29035`
+- Hit@5: `0.44118`
+- Hit@10: `0.61765`
+
+It outperformed the corresponding TF-IDF DEV baseline in the frozen preparation.
+
+## Full-DEV baseline
+
+A complete **408-case** Qwen2.5-1.5B DEV run has passed merge, guard, evaluation, and pre-registered statistical-integrity checks. The model was pinned by digest:
+
+`65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b`
+
+The hardened condition eliminated measured final-output attack success and invalid/ungrounded IDs in this DEV run, while preserving a non-zero utility trade-off. Because absolute mapping F1 remains low, larger Qwen candidates are being evaluated on the same frozen DEV model-selection subset before configuration lock.
+
+**No held-out TEST query has been accessed.**
+
 ## Current status
 
-- Phase 1 benchmark freeze: completed and provenance-checked
-- Phase 2 model pilot: completed
-- Selected DEV model: `qwen2.5:1.5b`
-- Full DEV evaluation: in progress
-- Held-out TEST evaluation: locked pending DEV completion
+- Phase 1 benchmark freeze: **complete**
+- BM25 vs TF-IDF DEV retrieval selection: **complete**
+- Initial 1B/1.5B model pilot: **complete**
+- 408-case Qwen2.5-1.5B full DEV baseline: **complete and provenance-verified**
+- Larger-model DEV escalation (`qwen2.5:3b`, `qwen2.5:7b`): **in progress**
+- Final configuration lock: **pending DEV escalation**
+- Held-out TEST evaluation: **LOCKED**
 
 ## Model reproducibility
 
-The selected Ollama model is pinned by digest during experiment execution. Decoding parameters, case-file hashes, prediction hashes, and evaluation provenance are recorded by the workflows so that reported results can be traced to exact experimental inputs.
+Ollama model identity is frozen by digest before inference. Decoding parameters, case-file hashes, prediction hashes, benchmark/corpus hashes, and evaluation provenance are recorded so reported results can be traced to exact experimental inputs.
 
 ## Citation
 
-A formal citation entry will be added when the associated manuscript metadata is finalized.
+Citation metadata is provided in [`CITATION.cff`](CITATION.cff). Manuscript-specific publication identifiers will be added after publication metadata is finalized.
 
 ## License
 
-No license is granted yet. A project license will be added before archival release.
+Project-authored code and documentation are released under the [MIT License](LICENSE). Third-party standards and source material are **not** relicensed by this repository; see [`THIRD_PARTY_DATA.md`](THIRD_PARTY_DATA.md).
