@@ -1,0 +1,180 @@
+name: AICCONF Phase2 DEV Pilot Qwen2.5 3B Sharded
+
+on:
+  push:
+    branches: [aicconf-full-dev-recovery-20260914]
+    paths: [.github/workflows/aicconf-phase2-dev-pilot-qwen3b-sharded.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify canonical v1.6 execution code
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >/tmp/expected <<'EOF'
+          00a9f33d691e502c7e4d77fb8f82cfa74af3370ea46049567e26c04b22a7dd44  ollama_preflight.py
+          ceacef9975d57e301535fc1f7d992133101e08f9e5b694eaad0e4e59ae603dc4  run_ollama.py
+          367b1cb539cfb58c5bbdd3f676b8b838ffc56732058b2d795621d9c48d6a6055  apply_output_guard.py
+          2070d73f14b3f3d605a5d26e006ce8c62512af1c265e2a537b14cc2477485ce4  evaluate_generation.py
+          40aab662c7c5b913abb20b545e5caec5996ff0e7c7677ec9058c7833438aa900  requirements.txt
+          119cb4772e2b2ce6377a6b4833d88b0d3306b92bb6eddd7cceb42d127d2ef365  schemas/model_output.schema.json
+          EOF
+          sha256sum -c /tmp/expected
+      - uses: actions/download-artifact@v4
+        with:
+          name: phase2-full-dev-prep
+          path: /tmp/dev
+          repository: ErcanErkalkan/evidence-constrained-rag-security-control-mapping
+          run-id: 34848420216
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Recreate identical 52-case pilot and shard 4x13
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,pathlib,hashlib
+          rows=[json.loads(x) for x in pathlib.Path('/tmp/dev/prompt_cases_dev_bm25.jsonl').read_text(encoding='utf-8').splitlines() if x.strip()]
+          qids=sorted({r['query_id'] for r in rows}); benign=set(qids[:6]); attacked=set(qids[:4])
+          out=[r for r in rows if (r['condition'] in {'C0_UNGROUNDED','C1_CLEAN_RAG'} and r['query_id'] in benign) or (r['condition'] in {'C2_COMPROMISED_RAG','C3_HARDENED_RAG'} and r['query_id'] in attacked)]
+          assert len(out)==52
+          p=pathlib.Path('/tmp/dev/pilot_cases_bm25.jsonl')
+          with p.open('w',encoding='utf-8') as f:
+              for r in out: f.write(json.dumps(r,sort_keys=True)+'\n')
+          h=hashlib.sha256(p.read_bytes()).hexdigest(); assert h=='aa40ea2ec310c8b3bfd62a01b44d026c7129c9996cc12a71ca04b7dfeec429ce',h
+          for s in range(4):
+              q=pathlib.Path(f'/tmp/dev/pilot3b_shard_{s}.jsonl')
+              subset=[r for i,r in enumerate(out) if i%4==s]
+              assert len(subset)==13
+              with q.open('w',encoding='utf-8') as f:
+                  for r in subset: f.write(json.dumps(r,sort_keys=True)+'\n')
+          print('PILOT_SHA256',h,'SHARDS',[13]*4)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3b-pilot-prep
+          path: /tmp/dev
+          retention-days: 30
+
+  infer:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/download-artifact@v4
+        with: {name: qwen3b-pilot-prep, path: /tmp/dev}
+      - name: Python deps
+        working-directory: aicconf_runner/phase2
+        run: python -m pip install -r requirements.txt
+      - name: Ollama runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ollama.com/install.sh | sh
+          OLLAMA_NUM_PARALLEL=1 OLLAMA_MAX_LOADED_MODELS=1 ollama serve >/tmp/ollama_${{ matrix.shard }}.log 2>&1 &
+          for i in {1..60}; do curl -fsS http://127.0.0.1:11434/api/version && break || sleep 2; done
+      - name: Freeze Qwen3B and infer shard
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          S='${{ matrix.shard }}'; MODEL='qwen2.5:3b'
+          ollama pull "$MODEL"
+          python ollama_preflight.py --model "$MODEL" --out "/tmp/dev/model3b_${S}.json"
+          python run_ollama.py --cases "/tmp/dev/pilot3b_shard_${S}.jsonl" --model "$MODEL" --model-freeze "/tmp/dev/model3b_${S}.json" --temperature 0 --seed 2027 --num-ctx 8192 --num-predict 512 --top-p 1 --top-k-sampling 40 --repeat-penalty 1.1 --timeout 180 --retries 2 --out "/tmp/dev/pred3b_${S}.jsonl"
+          python - <<PY
+          import json
+          s='$S'; m=json.load(open(f'/tmp/dev/pred3b_{s}.jsonl.manifest.json'))
+          assert m['status']=='PASS_COMPLETE' and m['case_count']==13 and not m['failures']
+          print(json.dumps({'shard':s,'model':m['model'],'model_digest':m['model_digest'],'cases':m['case_count']},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qwen3b-pilot-shard-${{ matrix.shard }}
+          path: |
+            /tmp/dev/model3b_${{ matrix.shard }}.json
+            /tmp/dev/pred3b_${{ matrix.shard }}.jsonl
+            /tmp/dev/pred3b_${{ matrix.shard }}.jsonl.manifest.json
+          retention-days: 30
+
+  aggregate:
+    needs: infer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/download-artifact@v4
+        with: {name: qwen3b-pilot-prep, path: /tmp/dev}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: qwen3b-pilot-shard-*
+          path: /tmp/shards
+          merge-multiple: false
+      - name: Install requirements
+        working-directory: aicconf_runner/phase2
+        run: python -m pip install -r requirements.txt
+      - name: Merge exactly 52 predictions with one frozen digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/final
+          python - <<'PY'
+          import json,pathlib,hashlib,statistics
+          pilot=[json.loads(x) for x in pathlib.Path('/tmp/dev/pilot_cases_bm25.jsonl').read_text(encoding='utf-8').splitlines() if x.strip()]
+          order=[r['case_id'] for r in pilot]; assert len(order)==52 and len(set(order))==52
+          preds={}; digests=set(); models=set(); manifests=[]
+          for p in sorted(pathlib.Path('/tmp/shards').rglob('pred3b_*.jsonl')):
+              mf=pathlib.Path(str(p)+'.manifest.json'); m=json.load(open(mf)); manifests.append(m)
+              assert m['status']=='PASS_COMPLETE' and m['case_count']==13 and not m['failures']
+              digests.add(m['model_digest']); models.add(m['model'])
+              for line in p.read_text(encoding='utf-8').splitlines():
+                  r=json.loads(line); assert not r.get('error',''); assert r['case_id'] not in preds; preds[r['case_id']]=r
+          assert len(manifests)==4 and len(preds)==52 and set(preds)==set(order)
+          assert models=={'qwen2.5:3b'} and len(digests)==1
+          out=pathlib.Path('/tmp/final/pred_qwen2.5_3b.jsonl')
+          with out.open('w',encoding='utf-8') as f:
+              for cid in order: f.write(json.dumps(preds[cid],ensure_ascii=False,sort_keys=True)+'\n')
+          l=[float(preds[c]['latency_s']) for c in order]
+          man={'status':'PASS_QWEN3B_PILOT_MERGED','case_count':52,'model':'qwen2.5:3b','model_digest':next(iter(digests)),'predictions_sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'latency_mean_s':sum(l)/len(l),'latency_median_s':statistics.median(l),'test_accessed':False}
+          pathlib.Path('/tmp/final/PILOT3B_MERGE_MANIFEST.json').write_text(json.dumps(man,indent=2),encoding='utf-8')
+          print(json.dumps(man,indent=2))
+          PY
+      - name: Guard and evaluate
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          python apply_output_guard.py --cases /tmp/dev/pilot_cases_bm25.jsonl --predictions /tmp/final/pred_qwen2.5_3b.jsonl --out /tmp/final/pred_qwen2.5_3b_guarded.jsonl
+          python evaluate_generation.py --cases /tmp/dev/pilot_cases_bm25.jsonl --predictions /tmp/final/pred_qwen2.5_3b_guarded.jsonl --corpus /tmp/dev/corpus_primary/nist_corpus.csv --outdir /tmp/final/eval
+          python - <<'PY'
+          import json
+          s=json.load(open('/tmp/final/eval/generation_summary.json')); m=json.load(open('/tmp/final/PILOT3B_MERGE_MANIFEST.json'))
+          print('MODEL_DIGEST',m['model_digest'],'LAT_MEAN',m['latency_mean_s'],'LAT_MED',m['latency_median_s'])
+          for c in ['C0_UNGROUNDED','C1_CLEAN_RAG','C2_COMPROMISED_RAG','C3_HARDENED_RAG']:
+              print(c,json.dumps({k:s[c].get(k) for k in ['f1','precision','recall','valid_json','schema_ok','attack_success','attack_target_adoption','invalid_control_id_rate','ungrounded_id_rate','evidence_supported_id_rate','guard_rejected']},sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwen3b-pilot-final
+          path: /tmp/final
+          retention-days: 30
