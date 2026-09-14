@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Fail-closed benchmark builder for CSA CCM -> NIST SP 800-53 mappings.
+
+This script intentionally refuses to invent semantic mappings. It discovers candidate
+mapping fields in CSV/JSON/YAML/XLSX artifacts, requires explicit approval of the
+source field/sheet, validates every NIST control identifier against a frozen NIST
+catalog, and emits auditable benchmark/exclusion/manifests.
+
+It is a Phase-1 scaffold: do not use final outputs until the official CSA mapping
+artifact, exact version, and compatible NIST catalog have been frozen.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+from collections import Counter
+import hashlib
+import json
+import re
+import sys
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Iterable
+
+NIST_ID_RE = re.compile(r"(?<![A-Z0-9])([A-Z]{2,3}-\d{1,2}(?:\(\d{1,2}\))?)(?![A-Z0-9(])", re.I)
+NIST_RANGE_TOKEN_RE = re.compile(r"^([A-Z]{2,3}-\d{1,2})\s*(?:\((\d{1,2})\))?(?:\s*[-–—]\s*\((\d{1,2})\))?$", re.I)
+CCM_ID_RE = re.compile(r"\b([A-Z&]{2,8}-\d{1,3})\b", re.I)
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def norm_key(s: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(s).strip().lower()).strip("_")
+
+
+def normalize_nist_id(raw: str) -> str:
+    s = raw.strip().upper().replace(" ", "")
+    # Preserve enhancement notation, normalize zero-padded enhancement numbers only.
+    m = re.fullmatch(r"([A-Z]{2,3}-\d{1,2})(?:\((\d{1,2})\))?", s)
+    if not m:
+        return s
+    base, enh = m.groups()
+    return base if enh is None else f"{base}({int(enh)})"
+
+
+def extract_nist_ids(value: Any) -> list[str]:
+    """Loose identifier extractor used only for catalog discovery.
+
+    Mapping cells are parsed by parse_nist_mapping_cell(), which is deliberately
+    stricter and expands CSA shorthand ranges such as SA-8(29)-(33).
+    """
+    if value is None:
+        return []
+    text = " ".join(value) if isinstance(value, list) else str(value)
+    out: list[str] = []
+    for m in NIST_ID_RE.finditer(text.upper()):
+        nid = normalize_nist_id(m.group(1))
+        if nid not in out:
+            out.append(nid)
+    return out
+
+
+def parse_nist_mapping_cell(value: Any) -> tuple[list[str], list[str], list[str]]:
+    """Parse a CSA mapping cell without silently losing range members.
+
+    Returns (expanded_ids, range_expressions, unparsed_tokens).  CSA CCM v4.0.13
+    uses enhancement ranges such as ``SA-8(29)-(33)``.  Treating that expression
+    with a simple ID regex would retain only SA-8(29), corrupting the gold label.
+    This parser expands the complete inclusive range and reports any non-empty
+    token it cannot understand.
+    """
+    if value is None:
+        return [], [], []
+    if isinstance(value, list):
+        text = "\n".join(str(x) for x in value)
+    else:
+        text = str(value)
+    text = text.replace("\r", "\n").strip()
+    if not text or text.casefold() in {"no mapping", "none", "n/a", "na", "null"}:
+        return [], [], []
+
+    # Official mapping cells are newline-delimited; semicolon/comma support makes
+    # the parser robust to CSV/XLSX serialisations without relaxing semantics.
+    tokens = [t.strip() for t in re.split(r"[\n;,]+", text) if t.strip()]
+    ids: list[str] = []
+    ranges: list[str] = []
+    unparsed: list[str] = []
+
+    for token in tokens:
+        if token.casefold() in {"no mapping", "none", "n/a", "na", "null"}:
+            continue
+        m = NIST_RANGE_TOKEN_RE.fullmatch(token.upper())
+        if not m:
+            unparsed.append(token)
+            continue
+        base, start_s, end_s = m.groups()
+        base = base.upper()
+        if end_s is None:
+            nid = normalize_nist_id(base if start_s is None else f"{base}({start_s})")
+            if nid not in ids:
+                ids.append(nid)
+            continue
+        if start_s is None:
+            # A range end without an enhancement start is ambiguous; never guess.
+            unparsed.append(token)
+            continue
+        start, end = int(start_s), int(end_s)
+        if end < start or end - start > 99:
+            unparsed.append(token)
+            continue
+        ranges.append(f"{base}({start})-({end})")
+        for enh in range(start, end + 1):
+            nid = f"{base}({enh})"
+            if nid not in ids:
+                ids.append(nid)
+    return ids, ranges, unparsed
+
+
+def flatten(obj: Any, prefix: str = "") -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            p = f"{prefix}.{k}" if prefix else str(k)
+            if isinstance(v, (dict, list)):
+                out.update(flatten(v, p))
+            else:
+                out[p] = v
+    elif isinstance(obj, list):
+        # Lists of scalars stay together; lists of objects are indexed.
+        if all(not isinstance(x, (dict, list)) for x in obj):
+            out[prefix] = obj
+        else:
+            for i, v in enumerate(obj):
+                out.update(flatten(v, f"{prefix}[{i}]"))
+    else:
+        out[prefix] = obj
+    return out
+
+
+def load_records(path: Path, sheet: str | None = None) -> tuple[list[dict[str, Any]], str]:
+    ext = path.suffix.lower()
+    if ext == ".csv":
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            return [dict(r) for r in csv.DictReader(f)], "csv"
