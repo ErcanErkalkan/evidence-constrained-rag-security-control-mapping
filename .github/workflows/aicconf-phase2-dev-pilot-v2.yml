@@ -1,0 +1,145 @@
+name: AICCONF Phase2 DEV Pilot v2
+
+on:
+  push:
+    branches: [aicconf-experiment-20260914]
+    paths: [.github/workflows/aicconf-phase2-dev-pilot-v2.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Verify only code used by DEV pilot
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >/tmp/expected <<'EOF'
+          7f0e569d4a0bda86d660a9ed6cd1ca7e75c25e7ccb84fa4ab427f901ebb7029e  common.py
+          591a5b1af756d33b0904c1fc12ffb8dc487af978b24ce4696a0eb86cf4a6a523  build_target_corpus.py
+          9116f4df79a46424059dfc0e29fc3e4018bfa6fa5623eebc8401b078ece6cca7  run_retrieval.py
+          e9100112365ea210aab55841ebf71eee8b20a7bde4b08c90085f4ea5065c6710  make_attack_fixtures.py
+          8e987a8d148c9f9adec9cd76984b2ad34350ab691e26f273d78e4f6885682aff  compose_prompt_cases.py
+          00a9f33d691e502c7e4d77fb8f82cfa74af3370ea46049567e26c04b22a7dd44  ollama_preflight.py
+          ceacef9975d57e301535fc1f7d992133101e08f9e5b694eaad0e4e59ae603dc4  run_ollama.py
+          367b1cb539cfb58c5bbdd3f676b8b838ffc56732058b2d795621d9c48d6a6055  apply_output_guard.py
+          2070d73f14b3f3d605a5d26e006ce8c62512af1c265e2a537b14cc2477485ce4  evaluate_generation.py
+          6d0883aee4fc9502b853cdcd84e9c8024064ed7b3c6283273257baa96ac43d64  prepare_phase2.py
+          40aab662c7c5b913abb20b545e5caec5996ff0e7c7677ec9058c7833438aa900  requirements.txt
+          119cb4772e2b2ce6377a6b4833d88b0d3306b92bb6eddd7cceb42d127d2ef365  schemas/model_output.schema.json
+          EOF
+          sha256sum -c /tmp/expected
+          python -m py_compile common.py build_target_corpus.py run_retrieval.py make_attack_fixtures.py compose_prompt_cases.py ollama_preflight.py run_ollama.py apply_output_guard.py evaluate_generation.py prepare_phase2.py
+      - name: Install analysis requirements
+        working-directory: aicconf_runner/phase2
+        run: python -m pip install -r requirements.txt
+      - name: Recover verified Phase1 freeze
+        env: {GH_TOKEN: '${{ github.token }}'}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/p1a /tmp/p1
+          gh run download 34834655690 --repo ErcanErkalkan/demo_ece --name AICCONF-PHASE1-FROZEN-HANDOFF --dir /tmp/p1a
+          echo 'ce3686fc029787e66d3291f63d01fc536d17ad0936fa812ea5a81e1978247c06  /tmp/p1a/PHASE1_FROZEN_HANDOFF.zip' | sha256sum -c -
+          unzip -q /tmp/p1a/PHASE1_FROZEN_HANDOFF.zip -d /tmp/p1
+          python -c "import json; x=json.load(open('/tmp/p1/benchmark_frozen/PHASE1_RELEASE_FREEZE.json')); assert x['status']=='PASS_PHASE1_FROZEN' and x['validation_report']['benchmark_rows']==195; print('PHASE1',x['status'])"
+      - name: Rebuild DEV preparation from freeze
+        working-directory: aicconf_runner/phase2
+        run: |
+          python prepare_phase2.py --phase1-run /tmp/p1 --split dev --top-k 10 --context-k 5 --attack-rank 1 --outdir /tmp/dev
+          python - <<'PY'
+          import json
+          m=json.load(open('/tmp/dev/PHASE2_DEV_PREP_MANIFEST.json'))
+          assert m['status']=='DEV_PREP_READY_NO_MODEL_RUN'
+          for method in ('bm25','tfidf'):
+              x=json.load(open(m['methods'][method]['metrics']))
+              print(method,json.dumps(x,sort_keys=True))
+          PY
+      - name: Select deterministic 52-case BM25 pilot
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          rows=[json.loads(x) for x in open('/tmp/dev/prompt_cases_dev_bm25.jsonl') if x.strip()]
+          qids=sorted({r['query_id'] for r in rows}); b=set(qids[:6]); a=set(qids[:4])
+          out=[r for r in rows if (r['condition'] in {'C0_UNGROUNDED','C1_CLEAN_RAG'} and r['query_id'] in b) or (r['condition'] in {'C2_COMPROMISED_RAG','C3_HARDENED_RAG'} and r['query_id'] in a)]
+          assert len(out)==52
+          with open('/tmp/dev/pilot_cases_bm25.jsonl','w') as f:
+              for r in out: f.write(json.dumps(r,sort_keys=True)+'\n')
+          print('pilot_cases',len(out))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase2-dev-prep-v16
+          path: /tmp/dev
+          retention-days: 30
+
+  model:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ['qwen2.5:1.5b','llama3.2:1b']
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/download-artifact@v4
+        with: {name: phase2-dev-prep-v16, path: /tmp/dev}
+      - name: Python deps
+        working-directory: aicconf_runner/phase2
+        run: python -m pip install -r requirements.txt
+      - name: Ollama runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ollama.com/install.sh | sh
+          OLLAMA_NUM_PARALLEL=1 OLLAMA_MAX_LOADED_MODELS=1 ollama serve >/tmp/ollama.log 2>&1 &
+          for i in {1..60}; do curl -fsS http://127.0.0.1:11434/api/version && break || sleep 2; done
+      - name: Freeze model and run DEV pilot
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL='${{ matrix.model }}'; SAFE=$(echo "$MODEL" | tr ':/' '__')
+          ollama pull "$MODEL"
+          python ollama_preflight.py --model "$MODEL" --out "/tmp/dev/model_${SAFE}.json"
+          python run_ollama.py --cases /tmp/dev/pilot_cases_bm25.jsonl --model "$MODEL" --model-freeze "/tmp/dev/model_${SAFE}.json" --temperature 0 --seed 2027 --num-ctx 8192 --num-predict 512 --top-p 1 --top-k-sampling 40 --repeat-penalty 1.1 --timeout 180 --retries 2 --out "/tmp/dev/pred_${SAFE}.jsonl"
+          python apply_output_guard.py --cases /tmp/dev/pilot_cases_bm25.jsonl --predictions "/tmp/dev/pred_${SAFE}.jsonl" --out "/tmp/dev/pred_${SAFE}_guarded.jsonl"
+          python evaluate_generation.py --cases /tmp/dev/pilot_cases_bm25.jsonl --predictions "/tmp/dev/pred_${SAFE}_guarded.jsonl" --corpus /tmp/dev/corpus_primary/nist_corpus.csv --outdir "/tmp/dev/eval_${SAFE}"
+      - name: Print compact model summary
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          MODEL='${{ matrix.model }}'; SAFE=$(echo "$MODEL" | tr ':/' '__')
+          python - <<PY
+          import json,statistics
+          safe='$SAFE'; rows=[json.loads(x) for x in open(f'/tmp/dev/pred_{safe}.jsonl')]
+          s=json.load(open(f'/tmp/dev/eval_{safe}/generation_summary.json'))
+          print('MODEL','$MODEL','N',len(rows),'LAT_MEAN',sum(r['latency_s'] for r in rows)/len(rows),'LAT_MED',statistics.median(r['latency_s'] for r in rows))
+          for c in ['C0_UNGROUNDED','C1_CLEAN_RAG','C2_COMPROMISED_RAG','C3_HARDENED_RAG']:
+              if c in s: print(c,json.dumps({k:s[c].get(k) for k in ['f1','valid_json','schema_ok','attack_success','raw_attack_success','attack_target_adoption','raw_attack_target_adoption','ungrounded_id_rate','guard_rejected']},sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase2-dev-pilot-${{ strategy.job-index }}
+          path: |
+            /tmp/dev/model_*.json
+            /tmp/dev/pred_*.jsonl
+            /tmp/dev/pred_*.manifest.json
+            /tmp/dev/eval_*/
+            /tmp/ollama.log
+          if-no-files-found: warn
+          retention-days: 30
