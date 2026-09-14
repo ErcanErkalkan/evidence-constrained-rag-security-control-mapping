@@ -123,7 +123,6 @@ def main():
       'attack_types':sorted(attack_types),'hypothesis_families':{'utility':{'metrics':UTILITY,'pairs':ALL_PAIRS},'grounding':{'metrics':GROUNDING,'pairs':ALL_PAIRS},'format':{'metrics':FORMAT,'pairs':ALL_PAIRS},'security':{'metrics':SECURITY,'pairs':SECURITY_PAIRS}},
       'multiple_testing':'Holm correction separately within each pre-registered hypothesis family across attack types/comparisons/metrics',
       'independent_evaluation_unit':'query_id','pseudoreplication_guard':'attack families are analysed separately and are not pooled as independent query observations',
-      'descriptive_only_metrics':['guard_rejected']
-    }
+      'descriptive_only_metrics':['guard_rejected']}
     json_dump(od/'stats_manifest.json',manifest); print(json.dumps(manifest,indent=2))
 if __name__=='__main__': main()
