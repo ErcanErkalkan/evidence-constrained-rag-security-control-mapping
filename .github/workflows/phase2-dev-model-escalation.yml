@@ -1,0 +1,121 @@
+name: Phase2 DEV Model Escalation
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/phase2-dev-model-escalation.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install requirements
+        working-directory: aicconf_runner/phase2
+        run: python -m pip install -r requirements.txt
+      - name: Recover verified full DEV preparation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/dev
+          gh run download 34848420216 --repo "$GITHUB_REPOSITORY" --name phase2-full-dev-prep --dir /tmp/dev
+          python - <<'PY'
+          import json
+          m=json.load(open('/tmp/dev/PHASE2_DEV_PREP_MANIFEST.json'))
+          assert m['status']=='DEV_PREP_READY_NO_MODEL_RUN'
+          assert m['benchmark_sha256']=='426d890e16513c3da449dfe08e93f29f556011e6a24288460c07ccba8f090f4f'
+          assert m['corpus_sha256']=='02b12c20fe14e6a46e11249579559b44e674580cbdcc7a7424dbdd704ebb11e3'
+          assert m['split']=='dev'
+          print('DEV PREP VERIFIED')
+          PY
+      - name: Recreate the exact 52-case model-selection pilot
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, pathlib, hashlib
+          src=pathlib.Path('/tmp/dev/prompt_cases_dev_bm25.jsonl')
+          rows=[json.loads(x) for x in src.read_text(encoding='utf-8').splitlines() if x.strip()]
+          qids=sorted({r['query_id'] for r in rows})
+          benign=set(qids[:6]); attacked=set(qids[:4])
+          out=[r for r in rows if (r['condition'] in {'C0_UNGROUNDED','C1_CLEAN_RAG'} and r['query_id'] in benign) or (r['condition'] in {'C2_COMPROMISED_RAG','C3_HARDENED_RAG'} and r['query_id'] in attacked)]
+          assert len(out)==52
+          p=pathlib.Path('/tmp/dev/model_selection_52_bm25.jsonl')
+          with p.open('w',encoding='utf-8') as f:
+              for r in out: f.write(json.dumps(r,ensure_ascii=False,sort_keys=True)+'\n')
+          print('pilot_cases',len(out),'sha256',hashlib.sha256(p.read_bytes()).hexdigest())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase2-dev-model-escalation-prep
+          path: /tmp/dev
+          retention-days: 30
+
+  model:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model: ['qwen2.5:3b','qwen2.5:7b']
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/download-artifact@v4
+        with: {name: phase2-dev-model-escalation-prep, path: /tmp/dev}
+      - name: Install requirements
+        working-directory: aicconf_runner/phase2
+        run: python -m pip install -r requirements.txt
+      - name: Install and start Ollama
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ollama.com/install.sh | sh
+          OLLAMA_NUM_PARALLEL=1 OLLAMA_MAX_LOADED_MODELS=1 ollama serve >/tmp/ollama.log 2>&1 &
+          for i in {1..60}; do curl -fsS http://127.0.0.1:11434/api/version && break || sleep 2; done
+      - name: Freeze model identity and run identical DEV pilot
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL='${{ matrix.model }}'; SAFE=$(echo "$MODEL" | tr ':/' '__')
+          mkdir -p "/tmp/result_${SAFE}"
+          ollama pull "$MODEL"
+          python ollama_preflight.py --model "$MODEL" --out "/tmp/result_${SAFE}/model_freeze.json"
+          python run_ollama.py --cases /tmp/dev/model_selection_52_bm25.jsonl --model "$MODEL" --model-freeze "/tmp/result_${SAFE}/model_freeze.json" --temperature 0 --seed 2027 --num-ctx 8192 --num-predict 512 --top-p 1 --top-k-sampling 40 --repeat-penalty 1.1 --timeout 180 --retries 2 --out "/tmp/result_${SAFE}/pred.jsonl"
+          python apply_output_guard.py --cases /tmp/dev/model_selection_52_bm25.jsonl --predictions "/tmp/result_${SAFE}/pred.jsonl" --out "/tmp/result_${SAFE}/pred_guarded.jsonl"
+          python evaluate_generation.py --cases /tmp/dev/model_selection_52_bm25.jsonl --predictions "/tmp/result_${SAFE}/pred_guarded.jsonl" --corpus /tmp/dev/corpus_primary/nist_corpus.csv --outdir "/tmp/result_${SAFE}/eval"
+          cp /tmp/dev/model_selection_52_bm25.jsonl "/tmp/result_${SAFE}/"
+          python - <<PY
+          import json, pathlib, statistics, hashlib
+          safe='$SAFE'; model='$MODEL'
+          root=pathlib.Path(f'/tmp/result_{safe}')
+          freeze=json.load(open(root/'model_freeze.json'))
+          manifest=json.load(open(root/'pred.jsonl.manifest.json'))
+          summary=json.load(open(root/'eval/generation_summary.json'))
+          rows=[json.loads(x) for x in open(root/'pred.jsonl',encoding='utf-8') if x.strip()]
+          assert freeze['status']=='PASS_OLLAMA_MODEL_FROZEN'
+          assert manifest['status']=='PASS_COMPLETE' and manifest['case_count']==52 and not manifest['failures']
+          out={'status':'PASS_DEV_MODEL_ESCALATION_PILOT','model':model,'model_digest':freeze['model_digest'],'ollama_version':freeze['ollama_version'],'case_count':52,'latency_mean_s':sum(r['latency_s'] for r in rows)/len(rows),'latency_median_s':statistics.median(r['latency_s'] for r in rows),'predictions_sha256':hashlib.sha256((root/'pred.jsonl').read_bytes()).hexdigest(),'test_accessed':False,'conditions':{k:v for k,v in summary.items() if not k.startswith('_')}}
+          (root/'MODEL_SELECTION_SUMMARY.json').write_text(json.dumps(out,indent=2,sort_keys=True),encoding='utf-8')
+          print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase2-dev-model-escalation-${{ strategy.job-index }}
+          path: /tmp/result_*/
+          if-no-files-found: error
+          retention-days: 30
