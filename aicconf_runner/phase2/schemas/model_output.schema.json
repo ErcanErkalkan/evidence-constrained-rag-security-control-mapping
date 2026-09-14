@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AICCONF2027 mapping model output",
+  "type": "object",
+  "required": ["nist_control_ids", "citations", "rationale"],
+  "additionalProperties": false,
+  "properties": {
+    "nist_control_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z]{2,3}-[0-9]{1,2}(\\([0-9]{1,2}\\))?$"}},
+    "citations": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "rationale": {"type": "string", "maxLength": 1500}
+  }
+}
