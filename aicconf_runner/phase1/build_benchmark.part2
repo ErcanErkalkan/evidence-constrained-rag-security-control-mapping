@@ -1,0 +1,150 @@
+    if ext == ".json":
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            # Prefer common record containers, otherwise use first list-of-dicts value.
+            for key in ("controls", "records", "items", "data", "mappings"):
+                if isinstance(data.get(key), list):
+                    data = data[key]
+                    break
+            else:
+                candidates = [v for v in data.values() if isinstance(v, list) and v and isinstance(v[0], dict)]
+                if len(candidates) == 1:
+                    data = candidates[0]
+        if not isinstance(data, list):
+            raise ValueError("JSON does not contain an unambiguous list of records")
+        return [flatten(x) if isinstance(x, dict) else {"value": x} for x in data], "json"
+    if ext in {".yaml", ".yml"}:
+        try:
+            import yaml  # type: ignore
+        except ImportError as e:
+            raise RuntimeError("PyYAML required for YAML input") from e
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            candidates = [v for v in data.values() if isinstance(v, list) and (not v or isinstance(v[0], dict))]
+            if len(candidates) == 1:
+                data = candidates[0]
+        if not isinstance(data, list):
+            raise ValueError("YAML does not contain an unambiguous list of records")
+        return [flatten(x) if isinstance(x, dict) else {"value": x} for x in data], "yaml"
+    if ext in {".xlsx", ".xlsm"}:
+        try:
+            import pandas as pd  # type: ignore
+        except ImportError as e:
+            raise RuntimeError("pandas/openpyxl required for XLSX input") from e
+        xls = pd.ExcelFile(path)
+        target = sheet or (xls.sheet_names[0] if len(xls.sheet_names) == 1 else None)
+        if not target:
+            raise ValueError(f"XLSX has multiple sheets; choose --sheet from {xls.sheet_names}")
+        df = pd.read_excel(path, sheet_name=target, dtype=str).fillna("")
+        return df.to_dict(orient="records"), f"xlsx:{target}"
+    raise ValueError(f"Unsupported input: {path.suffix}")
+
+
+def field_candidates(records: list[dict[str, Any]]) -> dict[str, list[str]]:
+    keys = sorted({k for r in records for k in r.keys()})
+    def pick(*terms: str) -> list[str]:
+        return [k for k in keys if all(t in norm_key(k) for t in terms)]
+    nist = [k for k in keys if "nist" in norm_key(k) and ("53" in norm_key(k) or "800" in norm_key(k))]
+    ccm_id = [k for k in keys if ("control" in norm_key(k) and "id" in norm_key(k)) or norm_key(k) in {"ccm_id", "ccm_control_id"}]
+    text = [k for k in keys if any(t in norm_key(k) for t in ("specification", "control_text", "description", "requirement"))]
+    title = [k for k in keys if "title" in norm_key(k)]
+    domain = [k for k in keys if "domain" in norm_key(k)]
+    gap = [k for k in keys if "gap" in norm_key(k)]
+    addendum = [k for k in keys if "addendum" in norm_key(k)]
+    return {"nist": nist, "ccm_id": ccm_id, "text": text, "title": title, "domain": domain, "gap": gap, "addendum": addendum, "all": keys}
+
+
+def read_nist_catalog(path: Path) -> set[str]:
+    records, _ = load_records(path)
+    cands = field_candidates(records)
+    # NIST source may call this control_id / number / identifier.
+    likely = cands["ccm_id"] + [k for k in cands["all"] if norm_key(k) in {"control_id", "identifier", "id", "number"}]
+    seen: set[str] = set()
+    for r in records:
+        for k in likely:
+            for nid in extract_nist_ids(r.get(k)):
+                seen.add(nid)
+    if not seen:
+        # Fall back to every field, but require a reasonable number to avoid silent bad parsing.
+        for r in records:
+            for v in r.values():
+                seen.update(extract_nist_ids(v))
+    if len(seen) < 50:
+        raise ValueError(f"Only {len(seen)} NIST IDs found; refusing to treat this as a control catalog")
+    return seen
+
+
+@dataclass
+class BenchmarkRow:
+    query_id: str
+    ccm_version: str
+    ccm_control_id: str
+    ccm_control_text: str
+    ccm_control_text_hash: str
+    ccm_domain: str
+    ccm_title: str
+    gold_nist_control_ids: str
+    gold_nist_control_ids_raw: str
+    gold_mapping_cardinality: int
+    gold_mapping_range_expressions: str
+    gold_mapping_gap_level: str
+    gold_mapping_addendum: str
+    mapping_source_file: str
+    mapping_source_version: str
+    mapping_source_sheet: str
+    mapping_source_row: str
+    nist_catalog_version: str
+    split: str
+    source_hash: str
+    notes: str
+
+
+def stable_split(control_id: str, seed: str, dev_pct: int) -> str:
+    val = int(hashlib.sha256(f"{seed}|{control_id}".encode()).hexdigest()[:8], 16) % 100
+    return "dev" if val < dev_pct else "test"
+
+
+def build(args: argparse.Namespace) -> int:
+    src = Path(args.mapping)
+    records, fmt = load_records(src, args.sheet)
+    if not records:
+        raise ValueError("Mapping artifact yielded zero records")
+    cands = field_candidates(records)
+    if args.discover:
+        print(json.dumps(cands, indent=2, ensure_ascii=False))
+        return 0
+
+    required = {
+        "ccm_id": args.ccm_id_field,
+        "text": args.text_field,
+        "nist": args.nist_field,
+    }
+    missing = [name for name, fld in required.items() if not fld]
+    if missing:
+        raise ValueError(f"Explicit fields required for {missing}. Run --discover first; fail-closed by design.")
+    for fld in required.values():
+        if fld not in cands["all"]:
+            raise ValueError(f"Approved field not found in artifact: {fld}")
+    # Critical guard: mapping field must name NIST/800-53 unless override acknowledgment supplied.
+    nk = norm_key(args.nist_field)
+    if not (("nist" in nk and ("53" in nk or "800" in nk)) or args.allow_nonstandard_nist_field):
+        raise ValueError("NIST mapping field name is not self-identifying; use explicit override only after manual source audit")
+
+    nist_ids = read_nist_catalog(Path(args.nist_catalog))
+    src_hash = sha256_file(src)
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    rows: list[BenchmarkRow] = []
+    exclusions: list[dict[str, Any]] = []
+    invalid_refs: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, tuple[str, ...]]] = set()
+
+    for idx, r in enumerate(records, start=2):  # spreadsheet-like row pointer
+        ccm_id = str(r.get(args.ccm_id_field, "")).strip().upper()
+        text = str(r.get(args.text_field, "")).strip()
+        rawmap = r.get(args.nist_field, "")
+        mapped, range_exprs, unparsed_tokens = parse_nist_mapping_cell(rawmap)
+        gap = str(r.get(args.gap_field, "")).strip() if args.gap_field else ""
+        addendum = str(r.get(args.addendum_field, "")).strip() if args.addendum_field else ""
+        title = str(r.get(args.title_field, "")).strip() if args.title_field else ""
