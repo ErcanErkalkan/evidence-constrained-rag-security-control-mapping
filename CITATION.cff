@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software or experimental artifact, please cite it using the metadata below. Manuscript-specific citation metadata will be updated after publication."
+title: "Evidence-Constrained RAG for Security-Control Mapping under Prompt Injection"
+type: software
+authors:
+  - family-names: Erkalkan
+    given-names: Ercan
+version: "0.1.0-dev"
+date-released: 2026-09-14
+license: MIT
+keywords:
+  - retrieval-augmented generation
+  - prompt injection
+  - security controls
+  - NIST SP 800-53
+  - cloud controls matrix
+  - reproducibility
+  - adversarial evaluation
