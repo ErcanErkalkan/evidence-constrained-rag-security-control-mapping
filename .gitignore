@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# Local environment / credentials
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local model/runtime state
+.ollama/
+*.gguf
+*.safetensors
+
+# Downloaded upstream raw data: reacquire through pinned scripts
+raw_data/
+downloads/
+
+# Local experiment outputs and caches
+runs/
+outputs/
+results_local/
+*.log
+
+# Build/package artifacts
+build/
+dist/
+*.egg-info/
+
+# Temporary transfer files
+*.tmp
+*.part
+*.b64
