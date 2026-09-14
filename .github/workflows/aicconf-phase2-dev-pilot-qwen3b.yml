@@ -1,0 +1,120 @@
+name: AICCONF Phase2 DEV Pilot Qwen2.5 3B
+
+on:
+  push:
+    branches: [aicconf-full-dev-recovery-20260914]
+    paths: [.github/workflows/aicconf-phase2-dev-pilot-qwen3b.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  pilot3b:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify canonical v1.6 execution code
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >/tmp/expected <<'EOF'
+          00a9f33d691e502c7e4d77fb8f82cfa74af3370ea46049567e26c04b22a7dd44  ollama_preflight.py
+          ceacef9975d57e301535fc1f7d992133101e08f9e5b694eaad0e4e59ae603dc4  run_ollama.py
+          367b1cb539cfb58c5bbdd3f676b8b838ffc56732058b2d795621d9c48d6a6055  apply_output_guard.py
+          2070d73f14b3f3d605a5d26e006ce8c62512af1c265e2a537b14cc2477485ce4  evaluate_generation.py
+          40aab662c7c5b913abb20b545e5caec5996ff0e7c7677ec9058c7833438aa900  requirements.txt
+          119cb4772e2b2ce6377a6b4833d88b0d3306b92bb6eddd7cceb42d127d2ef365  schemas/model_output.schema.json
+          EOF
+          sha256sum -c /tmp/expected
+          python -m py_compile ollama_preflight.py run_ollama.py apply_output_guard.py evaluate_generation.py
+
+      - name: Recover frozen DEV preparation from verified run
+        uses: actions/download-artifact@v4
+        with:
+          name: phase2-full-dev-prep
+          path: /tmp/dev
+          repository: ErcanErkalkan/evidence-constrained-rag-security-control-mapping
+          run-id: 34848420216
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Recreate and verify identical 52-case pilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, pathlib, hashlib
+          src=pathlib.Path('/tmp/dev/prompt_cases_dev_bm25.jsonl')
+          rows=[json.loads(x) for x in src.read_text(encoding='utf-8').splitlines() if x.strip()]
+          qids=sorted({r['query_id'] for r in rows})
+          benign=set(qids[:6]); attacked=set(qids[:4])
+          out=[r for r in rows if (r['condition'] in {'C0_UNGROUNDED','C1_CLEAN_RAG'} and r['query_id'] in benign) or (r['condition'] in {'C2_COMPROMISED_RAG','C3_HARDENED_RAG'} and r['query_id'] in attacked)]
+          assert len(out)==52, len(out)
+          p=pathlib.Path('/tmp/dev/pilot_cases_bm25.jsonl')
+          with p.open('w',encoding='utf-8') as f:
+              for r in out: f.write(json.dumps(r,sort_keys=True)+'\n')
+          h=hashlib.sha256(p.read_bytes()).hexdigest()
+          assert h=='aa40ea2ec310c8b3bfd62a01b44d026c7129c9996cc12a71ca04b7dfeec429ce', h
+          print('PILOT_SHA256',h,'CASES',len(out))
+          PY
+
+      - name: Install analysis requirements
+        working-directory: aicconf_runner/phase2
+        run: python -m pip install -r requirements.txt
+
+      - name: Install and start Ollama
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ollama.com/install.sh | sh
+          OLLAMA_NUM_PARALLEL=1 OLLAMA_MAX_LOADED_MODELS=1 ollama serve >/tmp/ollama.log 2>&1 &
+          for i in {1..60}; do curl -fsS http://127.0.0.1:11434/api/version && break || sleep 2; done
+
+      - name: Freeze Qwen2.5 3B and run identical DEV pilot
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL='qwen2.5:3b'; SAFE='qwen2.5_3b'
+          ollama pull "$MODEL"
+          python ollama_preflight.py --model "$MODEL" --out "/tmp/dev/model_${SAFE}.json"
+          python run_ollama.py --cases /tmp/dev/pilot_cases_bm25.jsonl --model "$MODEL" --model-freeze "/tmp/dev/model_${SAFE}.json" --temperature 0 --seed 2027 --num-ctx 8192 --num-predict 512 --top-p 1 --top-k-sampling 40 --repeat-penalty 1.1 --timeout 180 --retries 2 --out "/tmp/dev/pred_${SAFE}.jsonl"
+          python apply_output_guard.py --cases /tmp/dev/pilot_cases_bm25.jsonl --predictions "/tmp/dev/pred_${SAFE}.jsonl" --out "/tmp/dev/pred_${SAFE}_guarded.jsonl"
+          python evaluate_generation.py --cases /tmp/dev/pilot_cases_bm25.jsonl --predictions "/tmp/dev/pred_${SAFE}_guarded.jsonl" --corpus /tmp/dev/corpus_primary/nist_corpus.csv --outdir "/tmp/dev/eval_${SAFE}"
+
+      - name: Print compact 3B summary
+        working-directory: aicconf_runner/phase2
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,statistics
+          safe='qwen2.5_3b'
+          rows=[json.loads(x) for x in open(f'/tmp/dev/pred_{safe}.jsonl')]
+          m=json.load(open(f'/tmp/dev/model_{safe}.json'))
+          s=json.load(open(f'/tmp/dev/eval_{safe}/generation_summary.json'))
+          print('MODEL','qwen2.5:3b','DIGEST',m['model_digest'],'N',len(rows),'LAT_MEAN',sum(r['latency_s'] for r in rows)/len(rows),'LAT_MED',statistics.median(r['latency_s'] for r in rows))
+          for c in ['C0_UNGROUNDED','C1_CLEAN_RAG','C2_COMPROMISED_RAG','C3_HARDENED_RAG']:
+              print(c,json.dumps({k:s[c].get(k) for k in ['f1','precision','recall','valid_json','schema_ok','attack_success','raw_attack_success','attack_target_adoption','raw_attack_target_adoption','ungrounded_id_rate','invalid_control_id_rate','evidence_supported_id_rate','guard_rejected']},sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase2-dev-pilot-qwen25-3b
+          path: |
+            /tmp/dev/model_qwen2.5_3b.json
+            /tmp/dev/pred_qwen2.5_3b.jsonl
+            /tmp/dev/pred_qwen2.5_3b.manifest.json
+            /tmp/dev/pred_qwen2.5_3b_guarded.jsonl
+            /tmp/dev/eval_qwen2.5_3b/
+            /tmp/dev/pilot_cases_bm25.jsonl
+            /tmp/ollama.log
+          if-no-files-found: warn
+          retention-days: 30
