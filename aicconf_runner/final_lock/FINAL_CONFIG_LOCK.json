@@ -22,13 +22,29 @@
   },
   "environment": {
     "packages": {
-      "matplotlib": {"module_version": "3.11.2", "version": "3.11.2"},
-      "numpy": {"module_version": "2.4.6", "version": "2.4.6"},
-      "scikit-learn": {"module_version": "1.9.1", "version": "1.9.1"},
-      "scipy": {"module_version": "1.17.1", "version": "1.17.1"}
+      "matplotlib": {
+        "module_version": "3.11.2",
+        "version": "3.11.2"
+      },
+      "numpy": {
+        "module_version": "2.4.6",
+        "version": "2.4.6"
+      },
+      "scikit-learn": {
+        "module_version": "1.9.1",
+        "version": "1.9.1"
+      },
+      "scipy": {
+        "module_version": "1.17.1",
+        "version": "1.17.1"
+      }
     },
     "path_at_lock_time": "/mnt/data/final_lock_inputs/env/ENVIRONMENT_FREEZE.json",
-    "python": {"executable_name": "python", "implementation": "CPython", "version": "3.11.16"},
+    "python": {
+      "executable_name": "python",
+      "implementation": "CPython",
+      "version": "3.11.16"
+    },
     "sha256": "39fcd8fee7c20dd64e622d46e177f8db0b1e2f1ba3b693b2783f5b70fa19464b"
   },
   "lock_version": "1.6",
@@ -42,7 +58,14 @@
       "sha256": "08f870b21c32a00fbc49e5bfd0a31ae1b168e6ef5e2ba45a1ed012c939a17614"
     }
   ],
-  "output_guard": {"guarded_conditions": ["C3_HARDENED_RAG"], "max_citations": 20, "max_ids": 20, "max_rationale_chars": 1500},
+  "output_guard": {
+    "guarded_conditions": [
+      "C3_HARDENED_RAG"
+    ],
+    "max_citations": 20,
+    "max_ids": 20,
+    "max_rationale_chars": 1500
+  },
   "phase1": {
     "benchmark_sha256": "426d890e16513c3da449dfe08e93f29f556011e6a24288460c07ccba8f090f4f",
     "nist_source_sha256": "a5c30b90a5e327b0e2ebc0dbdbf0933e1d9273ead95a82b3201b06ab8f20ad8c",
@@ -71,8 +94,21 @@
     "statistical_tests.py": "383c0555dffa7eaf7d5dd78a1e9d7eba6cbf3438ea9e23569bb93ed9f6eb4708",
     "verify_final_results.py": "3610b4a257c5d70501c6a3ee910261a741d7d1719c24c7c2bda2900ba5be7375"
   },
-  "retrieval": {"context_k": 5, "methods": ["bm25", "tfidf"], "primary_method": "bm25", "top_k": 10},
+  "retrieval": {
+    "context_k": 5,
+    "methods": [
+      "bm25",
+      "tfidf"
+    ],
+    "primary_method": "bm25",
+    "top_k": 10
+  },
   "scientific_gate": "Any code/config/model/environment/source hash mismatch invalidates this lock. After TEST begins, do not retune from TEST outputs.",
-  "statistics": {"bootstrap_iters": 10000, "correction": "Holm within each pre-registered hypothesis family", "independent_unit": "query_id", "seed": 2027},
+  "statistics": {
+    "bootstrap_iters": 10000,
+    "correction": "Holm within each pre-registered hypothesis family",
+    "independent_unit": "query_id",
+    "seed": 2027
+  },
   "status": "LOCKED_FOR_TEST"
 }
