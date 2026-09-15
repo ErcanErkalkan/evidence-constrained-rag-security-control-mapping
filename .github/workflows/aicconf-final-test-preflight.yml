@@ -1,0 +1,171 @@
+name: AICCONF Final TEST Preflight
+
+on:
+  push:
+    branches: [aicconf-test-preflight-20260915]
+    paths: [.github/workflows/aicconf-final-test-preflight.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Reconstruct and verify canonical Phase-2 v1.6 code
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/p2 /tmp/missing
+          mkdir -p /tmp/p2 /tmp/missing
+          cp -a aicconf_runner/phase2/. /tmp/p2/
+          python - <<'PY'
+          import zipfile, pathlib
+          zpath=pathlib.Path('aicconf_runner/final_missing_v16.zip')
+          out=pathlib.Path('/tmp/p2')
+          with zipfile.ZipFile(zpath) as z:
+              for info in z.infolist():
+                  if info.is_dir():
+                      continue
+                  parts=list(pathlib.PurePosixPath(info.filename).parts)
+                  if parts and parts[0].startswith('aicconf_phase2'):
+                      parts=parts[1:]
+                  if not parts:
+                      continue
+                  target=out.joinpath(*parts)
+                  target.parent.mkdir(parents=True,exist_ok=True)
+                  target.write_bytes(z.read(info))
+          PY
+          python - <<'PY'
+          import hashlib,json,pathlib
+          lock=json.load(open('aicconf_runner/final_lock/FINAL_CONFIG_LOCK.json'))
+          root=pathlib.Path('/tmp/p2')
+          def h(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+          missing=[]; bad=[]
+          for name,expected in lock['phase2_code'].items():
+              p=root/name
+              if not p.is_file(): missing.append(name); continue
+              got=h(p)
+              if got!=expected: bad.append((name,got,expected))
+          assert not missing, missing
+          assert not bad, bad
+          print('PASS_CANONICAL_PHASE2_CODE',len(lock['phase2_code']))
+          PY
+
+      - name: Install exact frozen analysis environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check \
+            numpy==2.4.6 scikit-learn==1.9.1 scipy==1.17.1 matplotlib==3.11.2
+
+      - name: Recover and verify frozen Phase-1 handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/p1a /tmp/p1
+          mkdir -p /tmp/p1a /tmp/p1
+          gh run download 34834655690 \
+            --repo ErcanErkalkan/evidence-constrained-rag-security-control-mapping \
+            --name AICCONF-PHASE1-FROZEN-HANDOFF \
+            --dir /tmp/p1a
+          echo 'ce3686fc029787e66d3291f63d01fc536d17ad0936fa812ea5a81e1978247c06  /tmp/p1a/PHASE1_FROZEN_HANDOFF.zip' | sha256sum -c -
+          unzip -q /tmp/p1a/PHASE1_FROZEN_HANDOFF.zip -d /tmp/p1
+          python - <<'PY'
+          import hashlib,json,pathlib
+          root=pathlib.Path('/tmp/p1')
+          freeze=root/'benchmark_frozen/PHASE1_RELEASE_FREEZE.json'
+          bench=root/'benchmark_frozen/benchmark.csv'
+          nist=root/'sources/original/800-53-r5-controls.json'
+          h=lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+          x=json.load(open(freeze))
+          assert x['status']=='PASS_PHASE1_FROZEN'
+          assert h(freeze)=='fb147a40183658724d558a755ab2ba2ee0f1e23ec77980d207e8008b078672e4'
+          assert h(bench)=='426d890e16513c3da449dfe08e93f29f556011e6a24288460c07ccba8f090f4f'
+          assert h(nist)=='a5c30b90a5e327b0e2ebc0dbdbf0933e1d9273ead95a82b3201b06ab8f20ad8c'
+          print('PASS_PHASE1_FROZEN',x['validation_report']['benchmark_rows'])
+          PY
+
+      - name: Prepare locked TEST artifacts without exposing metrics
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/testprep
+          if ! python /tmp/p2/prepare_phase2.py \
+              --phase1-run /tmp/p1 \
+              --split test \
+              --test-lock "$GITHUB_WORKSPACE/aicconf_runner/final_lock/FINAL_CONFIG_LOCK.json" \
+              --top-k 10 --context-k 5 --attack-rank 1 \
+              --outdir /tmp/testprep >/tmp/testprep_build.log 2>&1; then
+            cat /tmp/testprep_build.log
+            exit 1
+          fi
+          python - <<'PY'
+          import hashlib,json,pathlib
+          td=pathlib.Path('/tmp/testprep')
+          m=json.load(open(td/'PHASE2_TEST_PREP_MANIFEST.json'))
+          assert m['status']=='TEST_PREPARED_UNDER_VERIFIED_LOCK'
+          assert m['split']=='test'
+          assert sorted(m['methods'])==['bm25','tfidf']
+          primary=td/'prompt_cases_test_bm25.jsonl'
+          n=sum(1 for line in primary.open(encoding='utf-8') if line.strip())
+          assert n>0
+          print('PASS_TEST_PREP','primary=bm25','cases='+str(n),'cases_sha256='+hashlib.sha256(primary.read_bytes()).hexdigest())
+          PY
+
+      - name: Verify frozen environment and locked model identity live
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '39fcd8fee7c20dd64e622d46e177f8db0b1e2f1ba3b693b2783f5b70fa19464b  aicconf_runner/final_lock/ENVIRONMENT_FREEZE.json' | sha256sum -c -
+          echo '08f870b21c32a00fbc49e5bfd0a31ae1b168e6ef5e2ba45a1ed012c939a17614  aicconf_runner/final_lock/MODEL_FREEZE_QWEN2.5_1.5B.json' | sha256sum -c -
+          curl -fsSL https://ollama.com/install.sh | sh
+          OLLAMA_NUM_PARALLEL=1 OLLAMA_MAX_LOADED_MODELS=1 ollama serve >/tmp/ollama-preflight.log 2>&1 &
+          for i in {1..60}; do curl -fsS http://127.0.0.1:11434/api/version && break || sleep 2; done
+          ollama pull qwen2.5:1.5b
+          python /tmp/p2/ollama_preflight.py --model qwen2.5:1.5b --out /tmp/LIVE_MODEL_FREEZE.json
+          python - <<'PY'
+          import json
+          locked=json.load(open('aicconf_runner/final_lock/MODEL_FREEZE_QWEN2.5_1.5B.json'))
+          live=json.load(open('/tmp/LIVE_MODEL_FREEZE.json'))
+          for k in ['status','requested_model','resolved_name','model_digest','ollama_version']:
+              assert live[k]==locked[k], (k,live[k],locked[k])
+          assert live['model_digest']=='65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b'
+          print('PASS_LIVE_MODEL_IDENTITY',live['requested_model'],live['model_digest'])
+          PY
+
+      - name: Canonical final runner verify-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python /tmp/p2/run_final_test.py \
+            --phase1-run /tmp/p1 \
+            --phase2-test-dir /tmp/testprep \
+            --test-lock "$GITHUB_WORKSPACE/aicconf_runner/final_lock/FINAL_CONFIG_LOCK.json" \
+            --environment-freeze "$GITHUB_WORKSPACE/aicconf_runner/final_lock/ENVIRONMENT_FREEZE.json" \
+            --model-freeze "$GITHUB_WORKSPACE/aicconf_runner/final_lock/MODEL_FREEZE_QWEN2.5_1.5B.json" \
+            --outdir /tmp/SHOULD_NOT_BE_CREATED \
+            --verify-only | tee /tmp/FINAL_VERIFY_ONLY.txt
+          test ! -e /tmp/testprep/FINAL_TEST_EXECUTION_REGISTRY.json
+          test ! -d /tmp/SHOULD_NOT_BE_CREATED
+          grep -q PASS_FINAL_PREREQUISITES_VERIFIED /tmp/FINAL_VERIFY_ONLY.txt
+          echo PASS_VERIFY_ONLY_NO_REGISTRY_NO_INFERENCE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AICCONF-FINAL-TEST-PREFLIGHT
+          path: |
+            /tmp/testprep
+            /tmp/LIVE_MODEL_FREEZE.json
+            /tmp/FINAL_VERIFY_ONLY.txt
+          retention-days: 30
