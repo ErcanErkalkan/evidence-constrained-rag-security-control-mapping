@@ -1,0 +1,19 @@
+name: AICCONF Phase2 Code Hash Audit
+
+on:
+  push:
+    branches: [aicconf-test-preflight-20260915]
+    paths:
+      - aicconf_runner/phase2/run_ollama.py
+      - .github/workflows/aicconf-phase2-code-hash-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  hash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print byte-exact hash
+        run: sha256sum aicconf_runner/phase2/run_ollama.py
