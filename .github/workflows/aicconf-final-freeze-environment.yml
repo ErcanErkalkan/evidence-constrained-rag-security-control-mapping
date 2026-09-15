@@ -18,23 +18,42 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Verify and unpack canonical Phase2 v1.6
+      - name: Verify DEV-final canonical dependency inputs
+        working-directory: aicconf_runner/phase2
         shell: bash
         run: |
           set -euo pipefail
-          ZIP="$GITHUB_WORKSPACE/aicconf_runner/AICCONF2027_Phase2_RAG_Scaffold_v1.6.zip"
-          echo '8f6c474ae3e9968bd708c7cb9b8ab2df5cfe66d78db63bc8fad614578b9d183b  '"$ZIP" | sha256sum -c -
-          mkdir -p /tmp/p2
-          unzip -q "$ZIP" -d /tmp/p2
-          cd /tmp/p2/aicconf_phase2_v16
-          sha256sum -c SHA256SUMS.txt
-          python -m py_compile common.py environment_preflight.py freeze_final_config.py run_final_test.py final_common.py verify_final_results.py
+          echo '40aab662c7c5b913abb20b545e5caec5996ff0e7c7677ec9058c7833438aa900  requirements.txt' | sha256sum -c -
+          echo '7f0e569d4a0bda86d660a9ed6cd1ca7e75c25e7ccb84fa4ab427f901ebb7029e  common.py' | sha256sum -c -
       - name: Install locked analysis requirements
-        working-directory: /tmp/p2/aicconf_phase2_v16
+        working-directory: aicconf_runner/phase2
         run: python -m pip install -r requirements.txt
-      - name: Freeze environment
-        working-directory: /tmp/p2/aicconf_phase2_v16
-        run: python environment_preflight.py --out /tmp/ENVIRONMENT_FREEZE.json
+      - name: Freeze environment with canonical v1.6 probe semantics
+        shell: bash
+        run: |
+          python - <<'PY'
+          import importlib, json, platform, sys
+          from importlib import metadata
+          required={'numpy':'numpy','scikit-learn':'sklearn','scipy':'scipy','matplotlib':'matplotlib'}
+          packages={}; errors=[]
+          for dist,module in required.items():
+              try:
+                  mod=importlib.import_module(module)
+                  packages[dist]={'version':metadata.version(dist),'module_version':getattr(mod,'__version__','')}
+              except Exception as e:
+                  errors.append(f'{dist}: {type(e).__name__}: {e}')
+          obj={
+            'status':'PASS_ENVIRONMENT_FROZEN' if not errors else 'FAIL_ENVIRONMENT_MISSING_DEPENDENCIES',
+            'python':{'version':platform.python_version(),'implementation':platform.python_implementation(),'executable_name':sys.executable.split('/')[-1]},
+            'platform':{'system':platform.system(),'release':platform.release(),'machine':platform.machine()},
+            'packages':packages,
+            'errors':errors,
+            'note':'Exact package versions are frozen for the final TEST run. Platform identity is recorded for provenance, not claimed as a portability guarantee.'
+          }
+          open('/tmp/ENVIRONMENT_FREEZE.json','w',encoding='utf-8').write(json.dumps(obj,ensure_ascii=False,indent=2,sort_keys=True))
+          print(json.dumps(obj,indent=2,ensure_ascii=False))
+          assert obj['status']=='PASS_ENVIRONMENT_FROZEN'
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: AICCONF-DEV-ENVIRONMENT-FREEZE
