@@ -85,13 +85,17 @@ def main():
         fpath=Path(args.model_freeze)
         frozen=json.loads(fpath.read_text(encoding='utf-8'))
         freeze_sha=sha256_file(fpath)
+        # The raw Ollama /api/show response includes modified_at, which changes
+        # when identical model bytes are pulled onto a fresh runner. Treat that
+        # whole-response hash as audit metadata, not model identity. Stable
+        # identity remains fail-closed on digest, resolved name/runtime version,
+        # model-info hash, and parameter hash.
         checks=[
             ('status',frozen.get('status'),'PASS_OLLAMA_MODEL_FROZEN'),
             ('requested_model',frozen.get('requested_model'),args.model),
             ('resolved_name',frozen.get('resolved_name'),runtime.get('resolved_name')),
             ('model_digest',frozen.get('model_digest'),runtime.get('model_digest')),
             ('ollama_version',frozen.get('ollama_version'),runtime.get('ollama_version')),
-            ('show_response_sha256',frozen.get('show_response_sha256'),runtime.get('show_response_sha256')),
             ('show_model_info_sha256',frozen.get('show_model_info_sha256'),runtime.get('show_model_info_sha256')),
             ('show_parameters_sha256',frozen.get('show_parameters_sha256'),runtime.get('show_parameters_sha256')),
         ]
