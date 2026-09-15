@@ -113,8 +113,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo '39fcd8fee7c20dd64e622d46e177f8db0b1e2f1ba3b693b2783f5b70fa19464b  aicconf_runner/final_lock/ENVIRONMENT_FREEZE.json' | sha256sum -c -
-          echo '08f870b21c32a00fbc49e5bfd0a31ae1b168e6ef5e2ba45a1ed012c939a17614  aicconf_runner/final_lock/MODEL_FREEZE_QWEN2.5_1.5B.json' | sha256sum -c -
+          echo '371f57fe60da12b6282906bed72b736573b5a6b661e8463c0b9a096d2e3ed6dc  aicconf_runner/final_lock/ENVIRONMENT_FREEZE.json' | sha256sum -c -
+          echo '49fdda0607527ff8b407c7d4c0398c4e29b22fdf729d2bc5ac9b0fec77834cca  aicconf_runner/final_lock/MODEL_FREEZE_QWEN2.5_1.5B.json' | sha256sum -c -
           curl -fsSL https://ollama.com/install.sh | sh
           OLLAMA_NUM_PARALLEL=1 OLLAMA_MAX_LOADED_MODELS=1 ollama serve >/tmp/ollama-preflight.log 2>&1 &
           for i in {1..60}; do curl -fsS http://127.0.0.1:11434/api/version && break || sleep 2; done
