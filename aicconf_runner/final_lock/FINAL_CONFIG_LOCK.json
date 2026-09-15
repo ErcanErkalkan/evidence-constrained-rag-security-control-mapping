@@ -45,7 +45,7 @@
       "implementation": "CPython",
       "version": "3.11.16"
     },
-    "sha256": "39fcd8fee7c20dd64e622d46e177f8db0b1e2f1ba3b693b2783f5b70fa19464b"
+    "sha256": "371f57fe60da12b6282906bed72b736573b5a6b661e8463c0b9a096d2e3ed6dc"
   },
   "lock_version": "1.6",
   "models": [
@@ -55,7 +55,7 @@
       "path_at_lock_time": "/mnt/data/final_lock_inputs/model_qwen2.5_1.5b.json",
       "requested_model": "qwen2.5:1.5b",
       "resolved_name": "qwen2.5:1.5b",
-      "sha256": "08f870b21c32a00fbc49e5bfd0a31ae1b168e6ef5e2ba45a1ed012c939a17614"
+      "sha256": "49fdda0607527ff8b407c7d4c0398c4e29b22fdf729d2bc5ac9b0fec77834cca"
     }
   ],
   "output_guard": {
