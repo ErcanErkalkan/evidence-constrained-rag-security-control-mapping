@@ -20,30 +20,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Reconstruct and verify canonical Phase-2 v1.6 code
+      - name: Verify canonical Phase-2 v1.6 code
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf /tmp/p2 /tmp/missing
-          mkdir -p /tmp/p2 /tmp/missing
+          rm -rf /tmp/p2
+          mkdir -p /tmp/p2
           cp -a aicconf_runner/phase2/. /tmp/p2/
-          python - <<'PY'
-          import zipfile, pathlib
-          zpath=pathlib.Path('aicconf_runner/final_missing_v16.zip')
-          out=pathlib.Path('/tmp/p2')
-          with zipfile.ZipFile(zpath) as z:
-              for info in z.infolist():
-                  if info.is_dir():
-                      continue
-                  parts=list(pathlib.PurePosixPath(info.filename).parts)
-                  if parts and parts[0].startswith('aicconf_phase2'):
-                      parts=parts[1:]
-                  if not parts:
-                      continue
-                  target=out.joinpath(*parts)
-                  target.parent.mkdir(parents=True,exist_ok=True)
-                  target.write_bytes(z.read(info))
-          PY
           python - <<'PY'
           import hashlib,json,pathlib
           lock=json.load(open('aicconf_runner/final_lock/FINAL_CONFIG_LOCK.json'))
@@ -52,11 +35,14 @@ jobs:
           missing=[]; bad=[]
           for name,expected in lock['phase2_code'].items():
               p=root/name
-              if not p.is_file(): missing.append(name); continue
+              if not p.is_file():
+                  missing.append(name)
+                  continue
               got=h(p)
-              if got!=expected: bad.append((name,got,expected))
-          assert not missing, missing
-          assert not bad, bad
+              if got!=expected:
+                  bad.append((name,got,expected))
+          assert not missing, ('missing canonical files',missing)
+          assert not bad, ('hash mismatch',bad)
           print('PASS_CANONICAL_PHASE2_CODE',len(lock['phase2_code']))
           PY
 
@@ -96,7 +82,7 @@ jobs:
           print('PASS_PHASE1_FROZEN',x['validation_report']['benchmark_rows'])
           PY
 
-      - name: Prepare locked TEST artifacts without exposing metrics
+      - name: Prepare locked TEST artifacts without exposing TEST metrics
         shell: bash
         run: |
           set -euo pipefail
