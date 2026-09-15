@@ -1,0 +1,40 @@
+{
+  "base_url": "http://localhost:11434",
+  "details": {
+    "context_length": 32768,
+    "embedding_length": 1536,
+    "families": [
+      "qwen2"
+    ],
+    "family": "qwen2",
+    "format": "gguf",
+    "parameter_size": "1.5B",
+    "parent_model": "",
+    "quantization_level": "Q4_K_M"
+  },
+  "model_digest": "65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b",
+  "model_size_bytes": 986061892,
+  "modified_at": "2026-09-14T11:17:31.21937064Z",
+  "ollama_version": "0.34.0",
+  "requested_model": "qwen2.5:1.5b",
+  "resolved_name": "qwen2.5:1.5b",
+  "runtime": {
+    "machine": "x86_64",
+    "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+    "python": "3.11.16"
+  },
+  "show_details": {
+    "families": [
+      "qwen2"
+    ],
+    "family": "qwen2",
+    "format": "gguf",
+    "parameter_size": "1.5B",
+    "parent_model": "",
+    "quantization_level": "Q4_K_M"
+  },
+  "show_model_info_sha256": "2af61f1e52117c7ba1c3a2ee38238b5c3272ba181eb48e816fb60d142aa6bbc5",
+  "show_parameters_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "show_response_sha256": "13f983509e7550d5bab6365131e7cae423228d931db6a3bb3b881a6b3bbfe7c1",
+  "status": "PASS_OLLAMA_MODEL_FROZEN"
+}

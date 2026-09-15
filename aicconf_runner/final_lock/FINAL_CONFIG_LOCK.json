@@ -1,0 +1,114 @@
+{
+  "attack": {
+    "attack_rank": 1,
+    "templates": [
+      "authority_spoof",
+      "evidence_conflict",
+      "fabricated_control",
+      "override",
+      "schema_break"
+    ]
+  },
+  "decoding": {
+    "num_ctx": 8192,
+    "num_predict": 512,
+    "repeat_penalty": 1.1,
+    "retries": 2,
+    "seed": 2027,
+    "temperature": 0.0,
+    "timeout_s": 180,
+    "top_k_sampling": 40,
+    "top_p": 1.0
+  },
+  "environment": {
+    "packages": {
+      "matplotlib": {
+        "module_version": "3.11.2",
+        "version": "3.11.2"
+      },
+      "numpy": {
+        "module_version": "2.4.6",
+        "version": "2.4.6"
+      },
+      "scikit-learn": {
+        "module_version": "1.9.1",
+        "version": "1.9.1"
+      },
+      "scipy": {
+        "module_version": "1.17.1",
+        "version": "1.17.1"
+      }
+    },
+    "path_at_lock_time": "/mnt/data/final_lock_inputs/env/ENVIRONMENT_FREEZE.json",
+    "python": {
+      "executable_name": "python",
+      "implementation": "CPython",
+      "version": "3.11.16"
+    },
+    "sha256": "39fcd8fee7c20dd64e622d46e177f8db0b1e2f1ba3b693b2783f5b70fa19464b"
+  },
+  "lock_version": "1.6",
+  "models": [
+    {
+      "model_digest": "65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b",
+      "ollama_version": "0.34.0",
+      "path_at_lock_time": "/mnt/data/final_lock_inputs/model_qwen2.5_1.5b.json",
+      "requested_model": "qwen2.5:1.5b",
+      "resolved_name": "qwen2.5:1.5b",
+      "sha256": "08f870b21c32a00fbc49e5bfd0a31ae1b168e6ef5e2ba45a1ed012c939a17614"
+    }
+  ],
+  "output_guard": {
+    "guarded_conditions": [
+      "C3_HARDENED_RAG"
+    ],
+    "max_citations": 20,
+    "max_ids": 20,
+    "max_rationale_chars": 1500
+  },
+  "phase1": {
+    "benchmark_sha256": "426d890e16513c3da449dfe08e93f29f556011e6a24288460c07ccba8f090f4f",
+    "nist_source_sha256": "a5c30b90a5e327b0e2ebc0dbdbf0933e1d9273ead95a82b3201b06ab8f20ad8c",
+    "release_sha256": "fb147a40183658724d558a755ab2ba2ee0f1e23ec77980d207e8008b078672e4"
+  },
+  "phase2_code": {
+    "ablation_tests.py": "b5d089b5ef9650e83948449ff05c05b5960c71226a28d94c0111e3effdd9ec5e",
+    "apply_output_guard.py": "367b1cb539cfb58c5bbdd3f676b8b838ffc56732058b2d795621d9c48d6a6055",
+    "build_target_corpus.py": "591a5b1af756d33b0904c1fc12ffb8dc487af978b24ce4696a0eb86cf4a6a523",
+    "common.py": "7f0e569d4a0bda86d660a9ed6cd1ca7e75c25e7ccb84fa4ab427f901ebb7029e",
+    "compose_prompt_cases.py": "8e987a8d148c9f9adec9cd76984b2ad34350ab691e26f273d78e4f6885682aff",
+    "environment_preflight.py": "36ef92975f7d458f75622e4c85c58c13c6465fd9e562a80c45966446e922a9b9",
+    "evaluate_generation.py": "2070d73f14b3f3d605a5d26e006ce8c62512af1c265e2a537b14cc2477485ce4",
+    "final_common.py": "c53c0e3dbff910d31c739ed61106d576f9ffbc0cdfe56f43021841322bf7dc73",
+    "freeze_final_config.py": "63d9d5b33963067dd2ebb8baaf648e202244127609f50b41edda213783fcb069",
+    "make_attack_fixtures.py": "e9100112365ea210aab55841ebf71eee8b20a7bde4b08c90085f4ea5065c6710",
+    "make_figures.py": "a667cb589c3415665b6b42baa0fc7157537b9e4fc442f40a64e312bfb58588e7",
+    "make_results_tables.py": "47ae33042b844a9f04abb863406c85c26b7b70d3b22c6926c14618fa0a2b0b88",
+    "ollama_preflight.py": "00a9f33d691e502c7e4d77fb8f82cfa74af3370ea46049567e26c04b22a7dd44",
+    "prepare_phase2.py": "6d0883aee4fc9502b853cdcd84e9c8024064ed7b3c6283273257baa96ac43d64",
+    "requirements.txt": "40aab662c7c5b913abb20b545e5caec5996ff0e7c7677ec9058c7833438aa900",
+    "run_dense_retrieval.py": "05004ab3e75f3a59e8fa6ab40de9aae1f656066efe8e45907a126e58dec99274",
+    "run_final_test.py": "0b6386cdaffe8735b6e0e512e2d8b0daf6fd574be11f32d3243bcf4ea71a37ee",
+    "run_ollama.py": "ceacef9975d57e301535fc1f7d992133101e08f9e5b694eaad0e4e59ae603dc4",
+    "run_retrieval.py": "9116f4df79a46424059dfc0e29fc3e4018bfa6fa5623eebc8401b078ece6cca7",
+    "statistical_tests.py": "383c0555dffa7eaf7d5dd78a1e9d7eba6cbf3438ea9e23569bb93ed9f6eb4708",
+    "verify_final_results.py": "3610b4a257c5d70501c6a3ee910261a741d7d1719c24c7c2bda2900ba5be7375"
+  },
+  "retrieval": {
+    "context_k": 5,
+    "methods": [
+      "bm25",
+      "tfidf"
+    ],
+    "primary_method": "bm25",
+    "top_k": 10
+  },
+  "scientific_gate": "Any code/config/model/environment/source hash mismatch invalidates this lock. After TEST begins, do not retune from TEST outputs.",
+  "statistics": {
+    "bootstrap_iters": 10000,
+    "correction": "Holm within each pre-registered hypothesis family",
+    "independent_unit": "query_id",
+    "seed": 2027
+  },
+  "status": "LOCKED_FOR_TEST"
+}

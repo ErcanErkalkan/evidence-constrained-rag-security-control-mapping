@@ -1,0 +1,33 @@
+{
+  "errors": [],
+  "note": "Exact package versions are frozen for the final TEST run. Platform identity is recorded for provenance, not claimed as a portability guarantee.",
+  "packages": {
+    "matplotlib": {
+      "module_version": "3.11.2",
+      "version": "3.11.2"
+    },
+    "numpy": {
+      "module_version": "2.4.6",
+      "version": "2.4.6"
+    },
+    "scikit-learn": {
+      "module_version": "1.9.1",
+      "version": "1.9.1"
+    },
+    "scipy": {
+      "module_version": "1.17.1",
+      "version": "1.17.1"
+    }
+  },
+  "platform": {
+    "machine": "x86_64",
+    "release": "6.17.0-1022-azure",
+    "system": "Linux"
+  },
+  "python": {
+    "executable_name": "python",
+    "implementation": "CPython",
+    "version": "3.11.16"
+  },
+  "status": "PASS_ENVIRONMENT_FROZEN"
+}
