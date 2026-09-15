@@ -25,7 +25,7 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/preflight /tmp/p1a /tmp/p1 /tmp/final_test_prep
           mkdir -p /tmp/preflight /tmp/p1a /tmp/p1
-          gh run download 34977100408 --repo ErcanErkalkan/evidence-constrained-rag-security-control-mapping --name AICCONF-FINAL-TEST-PREFLIGHT --dir /tmp/preflight
+          gh run download 34983032680 --repo ErcanErkalkan/evidence-constrained-rag-security-control-mapping --name AICCONF-FINAL-TEST-PREFLIGHT --dir /tmp/preflight
           grep -R -q 'PASS_FINAL_PREREQUISITES_VERIFIED' /tmp/preflight
           src=$(find /tmp/preflight -type f -name PHASE2_TEST_PREP_MANIFEST.json -printf '%h\n' | head -1)
           test -n "$src"
@@ -62,6 +62,7 @@ jobs:
           assert len(ids)==len(set(ids))==1932
           lock=pathlib.Path('aicconf_runner/final_lock/FINAL_CONFIG_LOCK.json')
           h=lambda p: hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+          rerun_reason='Technical rerun after pre-inference integrity-check failure in GitHub Actions run 34977601432: fresh Ollama pull changed only volatile /api/show modified_at and therefore the whole show_response_sha256; no TEST model response was generated or observed. Scientific configuration, model digest, prompts, retrieval, guard, decoding, and analysis choices are unchanged.'
           reg={
             'registry_version':'1.0',
             'events':[{
@@ -71,7 +72,7 @@ jobs:
               'lock_sha256':h(lock),
               'cases_sha256':h(src),
               'execution_mode':'single scientific TEST execution; 16 deterministic compute shards',
-              'rerun_acknowledgement':''
+              'rerun_acknowledgement':rerun_reason
             }]
           }
           (td/'FINAL_TEST_EXECUTION_REGISTRY.json').write_text(json.dumps(reg,indent=2,sort_keys=True)+'\n',encoding='utf-8')
@@ -247,10 +248,11 @@ jobs:
             'ablation_paired_tests':md/'ablation_stats/ablation_paired_tests.csv','ablation_stats_manifest':md/'ablation_stats/ablation_stats_manifest.json'}
           lock=pathlib.Path('aicconf_runner/final_lock/FINAL_CONFIG_LOCK.json'); env=pathlib.Path('aicconf_runner/final_lock/ENVIRONMENT_FREEZE.json'); mf=pathlib.Path('aicconf_runner/final_lock/MODEL_FREEZE_QWEN2.5_1.5B.json')
           prep=json.load(open(td/'PHASE2_TEST_PREP_MANIFEST.json'))
+          rerun_reason='Technical rerun after pre-inference integrity-check failure in GitHub Actions run 34977601432: fresh Ollama pull changed only volatile /api/show modified_at and therefore the whole show_response_sha256; no TEST model response was generated or observed. Scientific configuration, model digest, prompts, retrieval, guard, decoding, and analysis choices are unchanged.'
           man={
             'status':'PASS_FINAL_TEST_COMPLETE','manifest_version':'1.6',
             'started_utc':json.load(open(td/'FINAL_TEST_EXECUTION_REGISTRY.json'))['events'][0]['started_utc'],
-            'finished_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'rerun_acknowledgement':'',
+            'finished_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'rerun_acknowledgement':rerun_reason,
             'test_lock':{'path':str(lock),'sha256':h(lock)},
             'phase1':{'release_sha256':h(p1/'benchmark_frozen/PHASE1_RELEASE_FREEZE.json'),'benchmark_sha256':h(p1/'benchmark_frozen/benchmark.csv'),'nist_source_sha256':h(p1/'sources/original/800-53-r5-controls.json')},
             'test_preparation':{'manifest_path':str(td/'PHASE2_TEST_PREP_MANIFEST.json'),'manifest_sha256':h(td/'PHASE2_TEST_PREP_MANIFEST.json'),'primary_method':'bm25','cases_sha256':h(td/'prompt_cases_test_bm25.jsonl'),'corpus_sha256':h(td/'corpus_primary/nist_corpus.csv'),'attack_fixtures_sha256':h(td/'attack_fixtures.csv')},
