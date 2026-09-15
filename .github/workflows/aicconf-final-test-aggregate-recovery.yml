@@ -1,0 +1,161 @@
+name: AICCONF FINAL TEST Aggregate Recovery
+
+on:
+  push:
+    branches: [aicconf-test-preflight-20260915]
+    paths: [.github/workflows/aicconf-final-test-aggregate-recovery.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  aggregate-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+
+      - name: Recover original locked TEST prep and all 16 completed inference shards
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/prep_bundle /tmp/shards /tmp/final
+          mkdir -p /tmp/prep_bundle /tmp/shards
+          gh run download 34983567380 \
+            --repo ErcanErkalkan/evidence-constrained-rag-security-control-mapping \
+            --name aicconf-final-test-prep \
+            --dir /tmp/prep_bundle
+          gh run download 34983567380 \
+            --repo ErcanErkalkan/evidence-constrained-rag-security-control-mapping \
+            --pattern 'aicconf-final-test-shard-*' \
+            --dir /tmp/shards
+          python - <<'PY'
+          import glob,json,pathlib
+          files=sorted(glob.glob('/tmp/shards/**/pred_*.jsonl',recursive=True))
+          assert len(files)==16, files
+          counts=[]; ids=[]
+          for p in files:
+              rows=[json.loads(x) for x in open(p,encoding='utf-8') if x.strip()]
+              counts.append(len(rows)); ids.extend(r['case_id'] for r in rows)
+          assert sorted(counts)==sorted([121]*12+[120]*4), counts
+          assert len(ids)==len(set(ids))==1932, (len(ids),len(set(ids)))
+          print('PASS_RECOVERED_16_FROZEN_SHARDS',counts,'unique_cases=',len(set(ids)))
+          PY
+
+      - name: Install exact frozen analysis environment
+        run: python -m pip install --disable-pip-version-check numpy==2.4.6 scikit-learn==1.9.1 scipy==1.17.1 matplotlib==3.11.2
+
+      - name: Merge, evaluate, verify integrity, and derive publication artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          testdir=$(find /tmp/prep_bundle -type f -name PHASE2_TEST_PREP_MANIFEST.json -printf '%h\n' | head -1)
+          p1=$(find /tmp/prep_bundle -type f -path '*/benchmark_frozen/PHASE1_RELEASE_FREEZE.json' -printf '%h\n' | sed 's#/benchmark_frozen$##' | head -1)
+          test -n "$testdir" && test -n "$p1"
+          export TESTDIR="$testdir" P1="$p1"
+          modeldir=/tmp/final/models/qwen2.5_1.5b_65ec06548149
+          mkdir -p "$modeldir"
+          export MODELDIR="$modeldir"
+
+          python - <<'PY'
+          import json,glob,pathlib,hashlib,statistics,os
+          td=pathlib.Path(os.environ['TESTDIR']); md=pathlib.Path(os.environ['MODELDIR'])
+          order=json.load(open(td/'final_test_order.json'))
+          preds={}; lats=[]
+          files=sorted(glob.glob('/tmp/shards/**/pred_*.jsonl',recursive=True))
+          assert len(files)==16, files
+          for p in files:
+            for line in open(p,encoding='utf-8'):
+              r=json.loads(line); cid=r['case_id']
+              assert cid not in preds,cid
+              assert r['model']=='qwen2.5:1.5b'
+              assert r['model_digest']=='65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b'
+              assert r['ollama_version']=='0.34.0'
+              assert r['error']==''
+              preds[cid]=r; lats.append(float(r['latency_s']))
+          assert len(order)==len(preds)==1932,(len(order),len(preds))
+          assert set(order)==set(preds)
+          out=md/'predictions_raw.jsonl'
+          with out.open('w',encoding='utf-8',newline='\n') as f:
+            for cid in order: f.write(json.dumps(preds[cid],ensure_ascii=False,sort_keys=False)+'\n')
+          h=lambda p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+          full_cases=td/'prompt_cases_test_bm25.jsonl'
+          freeze=pathlib.Path('aicconf_runner/final_lock/MODEL_FREEZE_QWEN2.5_1.5B.json')
+          man={
+            'status':'PASS_COMPLETE','cases_sha256':h(full_cases),'predictions_sha256':h(out),
+            'case_count':1932,'failures':[],'model':'qwen2.5:1.5b',
+            'model_digest':'65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b',
+            'ollama_version':'0.34.0','runtime_probe':{'execution':'16 deterministic GitHub Actions shards from run 34983567380'},
+            'model_freeze_sha256':h(freeze),'model_freeze_verified':True,
+            'decoding_options':{'temperature':0.0,'seed':2027,'num_ctx':8192,'num_predict':512,'top_p':1.0,'top_k':40,'repeat_penalty':1.1},
+            'timeout_s':180,'retries':2,'resume_capable':False,'shard_count':16,
+            'latency_mean_s':sum(lats)/len(lats),'latency_median_s':statistics.median(lats),
+            'scientific_note':'Aggregate recovery only: reuses the immutable 16 completed TEST inference shard artifacts from run 34983567380; no model inference was repeated.'
+          }
+          (md/'predictions_raw.jsonl.manifest.json').write_text(json.dumps(man,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+          print('PASS_TEST_MERGE',man['case_count'],man['predictions_sha256'],man['latency_mean_s'],man['latency_median_s'])
+          PY
+
+          python aicconf_runner/phase2/evaluate_generation.py --cases "$testdir/prompt_cases_test_bm25.jsonl" --predictions "$modeldir/predictions_raw.jsonl" --corpus "$testdir/corpus_primary/nist_corpus.csv" --outdir "$modeldir/ablation_provenance_only_eval"
+          python aicconf_runner/phase2/apply_output_guard.py --cases "$testdir/prompt_cases_test_bm25.jsonl" --predictions "$modeldir/predictions_raw.jsonl" --out "$modeldir/predictions_c2_output_guard_only.jsonl" --condition C2_COMPROMISED_RAG --max-rationale-chars 1500 --max-ids 20 --max-citations 20
+          python aicconf_runner/phase2/evaluate_generation.py --cases "$testdir/prompt_cases_test_bm25.jsonl" --predictions "$modeldir/predictions_c2_output_guard_only.jsonl" --corpus "$testdir/corpus_primary/nist_corpus.csv" --outdir "$modeldir/ablation_output_guard_only_eval"
+          python aicconf_runner/phase2/apply_output_guard.py --cases "$testdir/prompt_cases_test_bm25.jsonl" --predictions "$modeldir/predictions_raw.jsonl" --out "$modeldir/predictions_guarded.jsonl" --max-rationale-chars 1500 --max-ids 20 --max-citations 20
+          python aicconf_runner/phase2/evaluate_generation.py --cases "$testdir/prompt_cases_test_bm25.jsonl" --predictions "$modeldir/predictions_guarded.jsonl" --corpus "$testdir/corpus_primary/nist_corpus.csv" --outdir "$modeldir/generation_eval"
+          python aicconf_runner/phase2/statistical_tests.py --per-case "$modeldir/generation_eval/generation_per_case.csv" --bootstrap-iters 10000 --seed 2027 --outdir "$modeldir/stats"
+          python aicconf_runner/phase2/ablation_tests.py --full-per-case "$modeldir/generation_eval/generation_per_case.csv" --provenance-only-per-case "$modeldir/ablation_provenance_only_eval/generation_per_case.csv" --output-guard-only-per-case "$modeldir/ablation_output_guard_only_eval/generation_per_case.csv" --bootstrap-iters 10000 --seed 2027 --outdir "$modeldir/ablation_stats"
+
+          python - <<'PY'
+          import json,pathlib,hashlib,os,datetime
+          root=pathlib.Path('/tmp/final'); md=pathlib.Path(os.environ['MODELDIR']); td=pathlib.Path(os.environ['TESTDIR']); p1=pathlib.Path(os.environ['P1'])
+          h=lambda p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+          files={
+            'raw_predictions':md/'predictions_raw.jsonl','inference_manifest':md/'predictions_raw.jsonl.manifest.json','guarded_predictions':md/'predictions_guarded.jsonl',
+            'per_case':md/'generation_eval/generation_per_case.csv','summary':md/'generation_eval/generation_summary.json',
+            'paired_tests':md/'stats/paired_tests.csv','stats_manifest':md/'stats/stats_manifest.json',
+            'provenance_only_per_case':md/'ablation_provenance_only_eval/generation_per_case.csv','provenance_only_summary':md/'ablation_provenance_only_eval/generation_summary.json',
+            'output_guard_only_predictions':md/'predictions_c2_output_guard_only.jsonl','output_guard_only_per_case':md/'ablation_output_guard_only_eval/generation_per_case.csv','output_guard_only_summary':md/'ablation_output_guard_only_eval/generation_summary.json',
+            'ablation_paired_tests':md/'ablation_stats/ablation_paired_tests.csv','ablation_stats_manifest':md/'ablation_stats/ablation_stats_manifest.json'}
+          lock=pathlib.Path('aicconf_runner/final_lock/FINAL_CONFIG_LOCK.json'); env=pathlib.Path('aicconf_runner/final_lock/ENVIRONMENT_FREEZE.json'); mf=pathlib.Path('aicconf_runner/final_lock/MODEL_FREEZE_QWEN2.5_1.5B.json')
+          rerun_reason='Technical rerun after pre-inference integrity-check failure in run 34977601432. Final inference itself occurred once in run 34983567380. This recovery only re-aggregates those immutable 16 shard artifacts after correcting an artifact-directory glob; no TEST model inference was repeated.'
+          man={
+            'status':'PASS_FINAL_TEST_COMPLETE','manifest_version':'1.6',
+            'started_utc':json.load(open(td/'FINAL_TEST_EXECUTION_REGISTRY.json'))['events'][0]['started_utc'],
+            'finished_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'rerun_acknowledgement':rerun_reason,
+            'test_lock':{'path':str(lock),'sha256':h(lock)},
+            'phase1':{'release_sha256':h(p1/'benchmark_frozen/PHASE1_RELEASE_FREEZE.json'),'benchmark_sha256':h(p1/'benchmark_frozen/benchmark.csv'),'nist_source_sha256':h(p1/'sources/original/800-53-r5-controls.json')},
+            'test_preparation':{'manifest_path':str(td/'PHASE2_TEST_PREP_MANIFEST.json'),'manifest_sha256':h(td/'PHASE2_TEST_PREP_MANIFEST.json'),'primary_method':'bm25','cases_sha256':h(td/'prompt_cases_test_bm25.jsonl'),'corpus_sha256':h(td/'corpus_primary/nist_corpus.csv'),'attack_fixtures_sha256':h(td/'attack_fixtures.csv')},
+            'environment_freeze_sha256':h(env),
+            'models':[{'requested_model':'qwen2.5:1.5b','resolved_name':'qwen2.5:1.5b','model_digest':'65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b','model_freeze_sha256':h(mf),'directory':str(md.relative_to(root)),'artifacts':{k:{'path':str(v.relative_to(root)),'sha256':h(v)} for k,v in files.items()}}],
+            'scientific_guard':'One locked held-out TEST inference execution. Aggregate recovery did not rerun the model and TEST outputs were not used to alter prompts, model, retrieval, guard, decoding, or analysis choices.'
+          }
+          (root/'FINAL_RUN_MANIFEST.json').write_text(json.dumps(man,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+          PY
+
+          python aicconf_runner/phase2/verify_final_results.py --final-run-dir /tmp/final --phase1-run "$p1" --phase2-test-dir "$testdir" --test-lock "$GITHUB_WORKSPACE/aicconf_runner/final_lock/FINAL_CONFIG_LOCK.json" --environment-freeze "$GITHUB_WORKSPACE/aicconf_runner/final_lock/ENVIRONMENT_FREEZE.json" --model-freeze "$GITHUB_WORKSPACE/aicconf_runner/final_lock/MODEL_FREEZE_QWEN2.5_1.5B.json"
+          python aicconf_runner/phase2/make_results_tables.py --final-run-dir /tmp/final --phase2-test-dir "$testdir" --outdir /tmp/final/publication_tables
+          python aicconf_runner/phase2/make_figures.py --final-run-dir /tmp/final --phase2-test-dir "$testdir" --outdir /tmp/final/publication_figures
+          cp "$testdir/FINAL_TEST_EXECUTION_REGISTRY.json" /tmp/final/
+          cp "$testdir/PHASE2_TEST_PREP_MANIFEST.json" /tmp/final/
+          cp "$testdir/retrieval_test_bm25/bm25_metrics.json" /tmp/final/TEST_BM25_RETRIEVAL_METRICS.json
+          cp "$testdir/retrieval_test_tfidf/tfidf_metrics.json" /tmp/final/TEST_TFIDF_RETRIEVAL_METRICS.json
+          echo '=== FINAL RESULT INTEGRITY ==='
+          cat /tmp/final/FINAL_RESULT_INTEGRITY.json
+          echo '=== FINAL GENERATION SUMMARY ==='
+          cat "$modeldir/generation_eval/generation_summary.json"
+          echo '=== FINAL PAIRED TESTS ==='
+          cat "$modeldir/stats/paired_tests.csv"
+          echo '=== FINAL ABLATION TESTS ==='
+          cat "$modeldir/ablation_stats/ablation_paired_tests.csv"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AICCONF-FINAL-TEST-v16-RECOVERED
+          path: /tmp/final
+          if-no-files-found: error
+          retention-days: 90
