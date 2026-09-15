@@ -1,3 +1,4 @@
+# Revalidated after pre-inference technical correction: volatile Ollama modified_at is not a model identity field.
 name: AICCONF Final TEST Preflight
 
 on:
