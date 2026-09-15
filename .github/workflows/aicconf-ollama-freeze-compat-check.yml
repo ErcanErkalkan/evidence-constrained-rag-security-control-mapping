@@ -1,0 +1,45 @@
+name: AICCONF Ollama Freeze Compatibility Check
+
+on:
+  push:
+    branches: [aicconf-test-preflight-20260915]
+    paths: [.github/workflows/aicconf-ollama-freeze-compat-check.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Install Ollama and normalize volatile manifest mtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ollama.com/install.sh | sh
+          OLLAMA_NUM_PARALLEL=1 OLLAMA_MAX_LOADED_MODELS=1 ollama serve >/tmp/ollama.log 2>&1 &
+          for i in {1..60}; do curl -fsS http://127.0.0.1:11434/api/version && break || sleep 2; done
+          ollama pull qwen2.5:1.5b
+          manifest=$(sudo find /usr/share/ollama /root/.ollama /home/runner/.ollama -type f -path '*/manifests/registry.ollama.ai/library/qwen2.5/1.5b' 2>/dev/null | head -1)
+          test -n "$manifest"
+          echo "MODEL_MANIFEST=$manifest"
+          stat "$manifest" || true
+          sudo touch -d '2026-09-14T11:17:31.21937064Z' "$manifest"
+          stat "$manifest" || true
+          python aicconf_runner/phase2/ollama_preflight.py --model qwen2.5:1.5b --out /tmp/live.json
+          python - <<'PY'
+          import json
+          x=json.load(open('/tmp/live.json'))
+          assert x['status']=='PASS_OLLAMA_MODEL_FROZEN'
+          assert x['model_digest']=='65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b'
+          assert x['ollama_version']=='0.34.0'
+          assert x['show_response_sha256']=='13f983509e7550d5bab6365131e7cae423228d931db6a3bb3b881a6b3bbfe7c1', x['show_response_sha256']
+          assert x['show_model_info_sha256']=='2af61f1e52117c7ba1c3a2ee38238b5c3272ba181eb48e816fb60d142aa6bbc5'
+          assert x['show_parameters_sha256']=='e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+          print('PASS_OLLAMA_VOLATILE_FREEZE_NORMALIZED',x['show_response_sha256'])
+          PY
