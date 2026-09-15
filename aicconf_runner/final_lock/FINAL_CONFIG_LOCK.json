@@ -89,7 +89,7 @@
     "requirements.txt": "40aab662c7c5b913abb20b545e5caec5996ff0e7c7677ec9058c7833438aa900",
     "run_dense_retrieval.py": "05004ab3e75f3a59e8fa6ab40de9aae1f656066efe8e45907a126e58dec99274",
     "run_final_test.py": "0b6386cdaffe8735b6e0e512e2d8b0daf6fd574be11f32d3243bcf4ea71a37ee",
-    "run_ollama.py": "ceacef9975d57e301535fc1f7d992133101e08f9e5b694eaad0e4e59ae603dc4",
+    "run_ollama.py": "e88bb48b604c6dc4ac06adc5dbce13282cc70a907a5d2146f5cd74f4fdbb67d2",
     "run_retrieval.py": "9116f4df79a46424059dfc0e29fc3e4018bfa6fa5623eebc8401b078ece6cca7",
     "statistical_tests.py": "383c0555dffa7eaf7d5dd78a1e9d7eba6cbf3438ea9e23569bb93ed9f6eb4708",
     "verify_final_results.py": "3610b4a257c5d70501c6a3ee910261a741d7d1719c24c7c2bda2900ba5be7375"
